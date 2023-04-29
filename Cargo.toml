@@ -16,3 +16,4 @@ name = "zfs"
 path = "src/main.rs"
 
 [dependencies]
+strum = { version = "0.24", default-features = false, features = ["derive"] }
