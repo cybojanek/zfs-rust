@@ -19,5 +19,9 @@ pub use compression_type::CompressionType;
 pub use dmu_type::DmuType;
 pub use dnode::{Dnode, DnodeDecodeError};
 pub use dva::{Dva, DvaDecodeError};
+pub use label::{
+    Blank, BlankDecodeError, BootHeader, BootHeaderDecodeError, Label, LabelDecode,
+    LabelOffsetError,
+};
 pub use uber_block::{UberBlock, UberBlockDecodeError};
 pub use zil_header::{ZilHeader, ZilHeaderDecodeError};
