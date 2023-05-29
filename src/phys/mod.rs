@@ -23,5 +23,6 @@ pub use label::{
     Blank, BlankDecodeError, BootHeader, BootHeaderDecodeError, Label, LabelDecode,
     LabelOffsetError,
 };
+pub use object_set::{ObjectSet, ObjectSetDecodeError, ObjectSetType};
 pub use uber_block::{UberBlock, UberBlockDecodeError};
 pub use zil_header::{ZilHeader, ZilHeaderDecodeError};
