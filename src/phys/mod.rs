@@ -20,8 +20,8 @@ pub use dmu_type::DmuType;
 pub use dnode::{Dnode, DnodeDecodeError};
 pub use dva::{Dva, DvaDecodeError};
 pub use label::{
-    Blank, BlankDecodeError, BootHeader, BootHeaderDecodeError, Label, LabelDecode,
-    LabelOffsetError,
+    Blank, BlankDecodeError, BootBlock, BootBlockDecodeError, BootHeader, BootHeaderDecodeError,
+    Label, LabelDecode, LabelOffsetError, DVA_BASE_OFFSET,
 };
 pub use object_set::{ObjectSet, ObjectSetDecodeError, ObjectSetType};
 pub use uber_block::{UberBlock, UberBlockDecodeError};

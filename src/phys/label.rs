@@ -10,6 +10,11 @@ use crate::phys::{ChecksumTail, UberBlock, UberBlockDecodeError};
 
 ////////////////////////////////////////////////////////////////////////////////
 
+/// Base offset for DVA calculations.
+pub const DVA_BASE_OFFSET: u64 = (2 * Label::LENGTH + BootBlock::LENGTH) as u64;
+
+////////////////////////////////////////////////////////////////////////////////
+
 /**
  * Blank portion of label.
  *
@@ -154,6 +159,66 @@ impl error::Error for BootHeaderDecodeError {
 ////////////////////////////////////////////////////////////////////////////////
 
 /**
+ * Boot block portion of label.
+ *
+ * - Bytes: 3670016 (3584 KiB, 3.5 MiB)
+ *
+ * ```text
+ *        6                   5                   4                   3                   2                   1                   0
+ *  3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
+ * +-------------------------------------------------------------------------------------------------------------------------------+
+ * |                                                              ...                                                              |
+ * |                                                 payload[0..3670016] (29360128)                                                |
+ * |                                                              ...                                                              |
+ * +-------------------------------------------------------------------------------------------------------------------------------+
+ * ```
+ */
+pub struct BootBlock {
+    pub payload: [u8; BootBlock::PAYLOAD_LENGTH],
+}
+
+impl BootBlock {
+    /// Byte length of an encoded [`BootBlock`].
+    pub const LENGTH: usize = 3584 * 1024;
+
+    /// Byte offset into a block device.
+    pub const OFFSET: u64 = (2 * Label::LENGTH) as u64;
+
+    /// Byte length of the blank payload (8152).
+    pub const PAYLOAD_LENGTH: usize = BootBlock::LENGTH;
+
+    /** Decodes a [`BootBlock`].
+     *
+     * # Errors.
+     *
+     * Returns [`BootBlockDecodeError`] on error.
+     */
+    pub fn from_bytes(bytes: &[u8; BootBlock::LENGTH]) -> Result<BootBlock, BootBlockDecodeError> {
+        Ok(BootBlock {
+            payload: bytes[0..BootBlock::PAYLOAD_LENGTH].try_into().unwrap(),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub enum BootBlockDecodeError {}
+
+impl fmt::Display for BootBlockDecodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "")
+    }
+}
+
+#[cfg(feature = "std")]
+impl error::Error for BootBlockDecodeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        None
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+/**
  * NV Pairs portion of label.
  *
  * - Bytes: 114688 (112 KiB)
@@ -230,12 +295,12 @@ impl error::Error for NvPairsDecodeError {
  * ### Label layout in block device:
  *
  * ```text
- * +----+----+-----+----+----+
- * | L0 | L1 | ... | L2 | L3 |
- * +----+----+-----+----+----+
+ * +----+----+-----------+-----+----+----+
+ * | L0 | L1 | BootBlock | ... | L2 | L3 |
+ * +----+----+-----------+-----+----+----+
  * ```
  *
- * ### Layout within a label:
+ * ### Layout within a label (L0, L1, L2, L3):
  *
  * ```text
  * +-------+------------+---------+-------------+-----+---------------+
