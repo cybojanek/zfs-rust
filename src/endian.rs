@@ -336,7 +336,12 @@ impl Decoder<'_> {
         }
     }
 
-    /** Skip the next `count` bytes.
+    /// Resets the decoder to the start of the data.
+    pub fn reset(&self) {
+        self.offset.set(0);
+    }
+
+    /** Skips the next `count` bytes.
      *
      * # Errors
      *
@@ -348,7 +353,33 @@ impl Decoder<'_> {
         Ok(())
     }
 
-    /** Rewind `count` bytes.
+    /** Skips the next `count` bytes as zero padding.
+     *
+     * # Errors
+     *
+     * Returns [`DecodeError`] if there are not enough bytes to skip, or the
+     * bytes are non-zero.
+     */
+    pub fn skip_zero_padding(&self, count: usize) -> Result<(), DecodeError> {
+        self.check_need(count)?;
+
+        let offset = self.offset.get();
+        let mut x = 0;
+
+        for idx in offset..offset + count {
+            x |= self.data[idx];
+        }
+
+        if x != 0 {
+            return Err(DecodeError::NonZeroPadding {});
+        }
+
+        self.offset.set(offset + count);
+
+        Ok(())
+    }
+
+    /** Rewinds `count` bytes.
      *
      * # Errors
      *
@@ -417,7 +448,7 @@ impl Decoder<'_> {
         Ok(<[u8; 8]>::try_from(&self.data[start..end]).unwrap())
     }
 
-    /** Decode bytes.
+    /** Decodes bytes.
      *
      * [`Endian`] does not matter for order of decoded bytes.
      *
@@ -940,6 +971,25 @@ impl Encoder<'_> {
     pub fn put_u64(&mut self, value: u64) -> Result<(), EncodeError> {
         self.put_8_bytes((self.encoder.put_u64)(value))
     }
+
+    /** Puts zero bytes as padding.
+     *
+     * # Errors
+     *
+     * Returns [`EncodeError`] if there are not enough bytes available.
+     */
+    pub fn put_zero_padding(&mut self, length: usize) -> Result<(), EncodeError> {
+        self.check_need(length)?;
+
+        let start = self.offset;
+        let end = start + length;
+
+        self.offset = end;
+
+        self.data[start..end].fill(0);
+
+        Ok(())
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -964,6 +1014,10 @@ pub enum DecodeError {
      * - `actual`   - Actual bytes.
      */
     InvalidMagic { expected: u64, actual: [u8; 8] },
+
+    /** Non-zero padding.
+     */
+    NonZeroPadding {},
 
     /** Rewind past start.
      *
@@ -991,6 +1045,7 @@ impl fmt::Display for DecodeError {
                 "Endian invalid magic expected {expected} actual {:?}",
                 actual
             ),
+            DecodeError::NonZeroPadding {} => write!(f, "Endian non-zero padding"),
             DecodeError::RewindPastStart { offset, count } => {
                 write!(f, "Endian rewind at offset {offset}, need {count} bytes")
             }

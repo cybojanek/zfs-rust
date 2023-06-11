@@ -25,6 +25,7 @@ use std::error;
 
 /** An XDR decoder.
  */
+#[derive(Debug)]
 pub struct Decoder<'a> {
     data: &'a [u8],
     offset: Cell<usize>,
@@ -41,7 +42,7 @@ impl Decoder<'_> {
      * use zfs::xdr::Decoder;
      *
      * // Some bytes.
-     * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+     * let data = [0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
      *
      * // Create decoder.
      * let decoder = Decoder::from_bytes(&data);
@@ -214,7 +215,12 @@ impl Decoder<'_> {
         }
     }
 
-    /** Skip length number of bytes.
+    /// Resets the decoder to the start of the data.
+    pub fn reset(&self) {
+        self.offset.set(0);
+    }
+
+    /** Skips length number of bytes.
      *
      * # Errors
      *
