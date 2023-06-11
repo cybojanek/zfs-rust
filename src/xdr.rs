@@ -7,8 +7,11 @@
  * - Numbers are encoded in big endian format.
  * - Strings and byte arrays are encoded as a length followed by the bytes,
  *   padded to a multiple of four. The length does not include the padding.
+ * - [`Decoder`] uses an internal [`Cell`] field for the `offset` field
+ *   in order to implement a split borrow.
  */
 
+use core::cell::Cell;
 use core::fmt;
 use core::marker::Sized;
 use core::num;
@@ -24,7 +27,7 @@ use std::error;
  */
 pub struct Decoder<'a> {
     data: &'a [u8],
-    offset: usize,
+    offset: Cell<usize>,
 }
 
 impl Decoder<'_> {
@@ -41,7 +44,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(&data);
      * assert_eq!(decoder.len(), 8);
      *
      * // Decode values.
@@ -60,7 +63,7 @@ impl Decoder<'_> {
     pub fn from_bytes(data: &[u8]) -> Decoder {
         Decoder {
             data: data,
-            offset: 0,
+            offset: Cell::new(0),
         }
     }
 
@@ -73,12 +76,13 @@ impl Decoder<'_> {
      */
     fn check_need(&self, count: usize) -> Result<(), DecodeError> {
         // Safely compute bytes remaining.
+        let offset = self.offset.get();
         let length = self.data.len();
-        let remaining = match length.checked_sub(self.offset) {
+        let remaining = match length.checked_sub(offset) {
             Some(v) => v,
             None => {
                 return Err(DecodeError::InvalidOffset {
-                    offset: self.offset,
+                    offset: offset,
                     length: length,
                 })
             }
@@ -89,7 +93,7 @@ impl Decoder<'_> {
             Ok(())
         } else {
             Err(DecodeError::EndOfInput {
-                offset: self.offset,
+                offset: offset,
                 length: length,
                 count: count,
             })
@@ -103,9 +107,10 @@ impl Decoder<'_> {
      * Returns [`DecodeError`] if there are enough bytes available, or internal
      * offset is malformed.
      */
-    fn consume_padding(&mut self) -> Result<(), DecodeError> {
+    fn consume_padding(&self) -> Result<(), DecodeError> {
         // Compute padding.
-        let remainder = self.offset % 4;
+        let offset = self.offset.get();
+        let remainder = offset % 4;
         let padding = if remainder == 0 { 0 } else { 4 - remainder };
 
         // Check bounds for padding.
@@ -114,7 +119,7 @@ impl Decoder<'_> {
         // TODO(cybojanek): Validate that padding is all zeros?
 
         // Skip the padding.
-        self.offset += padding;
+        self.offset.set(offset + padding);
 
         Ok(())
     }
@@ -134,7 +139,7 @@ impl Decoder<'_> {
      *     0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
      *     0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
      * ];
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * assert_eq!(decoder.capacity(), data.len());
      * decoder.get_u64();
@@ -162,7 +167,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * while !decoder.is_empty() {
@@ -188,7 +193,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * assert_eq!(decoder.len(), 8);
@@ -203,7 +208,7 @@ impl Decoder<'_> {
      */
     pub fn len(&self) -> usize {
         // Gracefully handle offset errors, and just return 0.
-        match self.data.len().checked_sub(self.offset) {
+        match self.data.len().checked_sub(self.offset.get()) {
             Some(v) => v,
             None => 0,
         }
@@ -215,9 +220,9 @@ impl Decoder<'_> {
      *
      * Returns [`DecodeError`] if there are not enough bytes available.
      */
-    pub fn skip(&mut self, length: usize) -> Result<(), DecodeError> {
+    pub fn skip(&self, length: usize) -> Result<(), DecodeError> {
         self.check_need(length)?;
-        self.offset += length;
+        self.offset.set(self.offset.get() + length);
         self.consume_padding()?;
         Ok(())
     }
@@ -228,13 +233,13 @@ impl Decoder<'_> {
      *
      * Returns [`DecodeError`] if there are not enough bytes available.
      */
-    fn get_4_bytes(&mut self) -> Result<[u8; 4], DecodeError> {
+    fn get_4_bytes(&self) -> Result<[u8; 4], DecodeError> {
         self.check_need(4)?;
 
-        let start = self.offset;
+        let start = self.offset.get();
         let end = start + 4;
 
-        self.offset = end;
+        self.offset.set(end);
 
         Ok(<[u8; 4]>::try_from(&self.data[start..end]).unwrap())
     }
@@ -245,13 +250,13 @@ impl Decoder<'_> {
      *
      * Returns [`DecodeError`] if there are not enough bytes available.
      */
-    fn get_8_bytes(&mut self) -> Result<[u8; 8], DecodeError> {
+    fn get_8_bytes(&self) -> Result<[u8; 8], DecodeError> {
         self.check_need(8)?;
 
-        let start = self.offset;
+        let start = self.offset.get();
         let end = start + 8;
 
-        self.offset = end;
+        self.offset.set(end);
 
         Ok(<[u8; 8]>::try_from(&self.data[start..end]).unwrap())
     }
@@ -273,7 +278,7 @@ impl Decoder<'_> {
      * let data = &[0x12, 0x34, 0x56, 0x78, 0x61, 0x62, 0x63, 0x00];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_n_bytes(5).unwrap();
@@ -291,7 +296,7 @@ impl Decoder<'_> {
      * let data = &[0x12, 0x34, 0x56, 0x78, 0x61, 0x62, 0x63];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 1 more byte for padding.
      * assert!(decoder.get_n_bytes(5).is_err());
@@ -306,23 +311,23 @@ impl Decoder<'_> {
      * let data = &[0x12, 0x34, 0x56, 0x78, 0x61, 0x62, 0x63];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 1 more byte for string.
      * assert!(decoder.get_n_bytes(8).is_err());
      * ```
      */
-    pub fn get_n_bytes(&mut self, length: usize) -> Result<&[u8], DecodeError> {
+    pub fn get_n_bytes(&self, length: usize) -> Result<&[u8], DecodeError> {
         // Check bounds for length.
         self.check_need(length)?;
 
         // Start and end of bytes.
-        let start = self.offset;
+        let start = self.offset.get();
         let end = start + length;
 
         // Consume bytes.
         let value = &self.data[start..end];
-        self.offset += length;
+        self.offset.set(end);
 
         // Consume padding.
         self.consume_padding()?;
@@ -349,7 +354,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_bool().unwrap();
@@ -368,7 +373,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x03];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // 3 is not a valid boolean.
      * assert!(decoder.get_bool().is_err());
@@ -383,14 +388,14 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 4 bytes.
      * assert!(decoder.get_bool().is_err());
      * ```
      */
-    pub fn get_bool(&mut self) -> Result<bool, DecodeError> {
-        let offset = self.offset;
+    pub fn get_bool(&self) -> Result<bool, DecodeError> {
+        let offset = self.offset.get();
         let value = self.get_u32()?;
         match value {
             0 => Ok(false),
@@ -417,7 +422,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x03, 0x61, 0x62, 0x63, 0x00];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_bytes().unwrap();
@@ -435,7 +440,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x03, 0x61, 0x62, 0x63];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 1 more byte for padding.
      * assert!(decoder.get_bytes().is_err());
@@ -450,13 +455,13 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x05, 0x61, 0x62, 0x63, 0x64];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 1 more byte for string.
      * assert!(decoder.get_bytes().is_err());
      * ```
      */
-    pub fn get_bytes(&mut self) -> Result<&[u8], DecodeError> {
+    pub fn get_bytes(&self) -> Result<&[u8], DecodeError> {
         let length = self.get_usize()?;
         self.get_n_bytes(length)
     }
@@ -467,7 +472,7 @@ impl Decoder<'_> {
      *
      * Returns [`DecodeError`] if there are not enough bytes available.
      */
-    pub fn get_f32(&mut self) -> Result<f32, DecodeError> {
+    pub fn get_f32(&self) -> Result<f32, DecodeError> {
         let bytes = self.get_4_bytes()?;
         Ok(f32::from_be_bytes(bytes))
     }
@@ -478,7 +483,7 @@ impl Decoder<'_> {
      *
      * Returns [`DecodeError`] if there are not enough bytes available.
      */
-    pub fn get_f64(&mut self) -> Result<f64, DecodeError> {
+    pub fn get_f64(&self) -> Result<f64, DecodeError> {
         let bytes = self.get_8_bytes()?;
         Ok(f64::from_be_bytes(bytes))
     }
@@ -500,7 +505,7 @@ impl Decoder<'_> {
      * let data = &[0x12, 0x34, 0x56, 0x78, 0xed, 0xcb, 0xa9, 0x88];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_i32().unwrap();
@@ -519,13 +524,13 @@ impl Decoder<'_> {
      * let data = &[0x12, 0x34, 0x56];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 4 bytes.
      * assert!(decoder.get_i32().is_err());
      * ```
      */
-    pub fn get_i32(&mut self) -> Result<i32, DecodeError> {
+    pub fn get_i32(&self) -> Result<i32, DecodeError> {
         let bytes = self.get_4_bytes()?;
         Ok(i32::from_be_bytes(bytes))
     }
@@ -550,7 +555,7 @@ impl Decoder<'_> {
      * ];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_i64().unwrap();
@@ -569,13 +574,13 @@ impl Decoder<'_> {
      * let data = &[0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 4 bytes.
      * assert!(decoder.get_i64().is_err());
      * ```
      */
-    pub fn get_i64(&mut self) -> Result<i64, DecodeError> {
+    pub fn get_i64(&self) -> Result<i64, DecodeError> {
         let bytes = self.get_8_bytes()?;
         Ok(i64::from_be_bytes(bytes))
     }
@@ -597,7 +602,7 @@ impl Decoder<'_> {
      * let data = &[0xf2, 0x34, 0x56, 0x78];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_u32().unwrap();
@@ -614,13 +619,13 @@ impl Decoder<'_> {
      * let data = &[0xf2, 0x34, 0x56];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 4 bytes.
      * assert!(decoder.get_u32().is_err());
      * ```
      */
-    pub fn get_u32(&mut self) -> Result<u32, DecodeError> {
+    pub fn get_u32(&self) -> Result<u32, DecodeError> {
         let bytes = self.get_4_bytes()?;
         Ok(u32::from_be_bytes(bytes))
     }
@@ -642,7 +647,7 @@ impl Decoder<'_> {
      * let data = &[0xf2, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_u64().unwrap();
@@ -659,13 +664,13 @@ impl Decoder<'_> {
      * let data = &[0xf2, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 4 bytes.
      * assert!(decoder.get_u64().is_err());
      * ```
      */
-    pub fn get_u64(&mut self) -> Result<u64, DecodeError> {
+    pub fn get_u64(&self) -> Result<u64, DecodeError> {
         let bytes = self.get_8_bytes()?;
         Ok(u64::from_be_bytes(bytes))
     }
@@ -687,7 +692,7 @@ impl Decoder<'_> {
      * let data = &[0xf2, 0x34, 0x56, 0x78];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_usize().unwrap();
@@ -704,14 +709,14 @@ impl Decoder<'_> {
      * let data = &[0xf2, 0x34, 0x56];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 4 bytes.
      * assert!(decoder.get_usize().is_err());
      * ```
      */
-    pub fn get_usize(&mut self) -> Result<usize, DecodeError> {
-        let offset = self.offset;
+    pub fn get_usize(&self) -> Result<usize, DecodeError> {
+        let offset = self.offset.get();
         let value = self.get_u32()?;
 
         match usize::try_from(value) {
@@ -737,15 +742,20 @@ impl Decoder<'_> {
      * use zfs::xdr::Decoder;
      *
      * // Some bytes.
-     * let data = &[0x00, 0x00, 0x00, 0x03, 0x61, 0x62, 0x63, 0x00];
+     * let data = &[
+     *     0x00, 0x00, 0x00, 0x03, 0x61, 0x62, 0x63, 0x00,
+     *     0x00, 0x00, 0x00, 0x02, 0x64, 0x65, 0x00, 0x00,
+     * ];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a = decoder.get_str().unwrap();
+     * let b = decoder.get_str().unwrap();
      *
      * assert_eq!(a, "abc");
+     * assert_eq!(b, "de");
      * ```
      *
      * Truncated padding:
@@ -757,7 +767,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x03, 0x61, 0x62, 0x63];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 1 more byte for padding.
      * assert!(decoder.get_str().is_err());
@@ -772,7 +782,7 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x05, 0x61, 0x62, 0x63, 0x64];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 1 more byte for string.
      * assert!(decoder.get_str().is_err());
@@ -787,15 +797,15 @@ impl Decoder<'_> {
      * let data = &[0x00, 0x00, 0x00, 0x03, 0x61, 0x62, 0xff, 0x00];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Need 1 more byte for string.
      * assert!(decoder.get_str().is_err());
      * ```
      */
-    pub fn get_str(&mut self) -> Result<&str, DecodeError> {
+    pub fn get_str(&self) -> Result<&str, DecodeError> {
         let length = self.get_usize()?;
-        let offset = self.offset;
+        let offset = self.offset.get();
         let data = self.get_n_bytes(length)?;
 
         match core::str::from_utf8(data) {
@@ -830,7 +840,7 @@ impl Decoder<'_> {
      * ];
      *
      * // Create decoder.
-     * let mut decoder = Decoder::from_bytes(data);
+     * let decoder = Decoder::from_bytes(data);
      *
      * // Decode values.
      * let a: bool = decoder.get().unwrap();
@@ -850,7 +860,7 @@ impl Decoder<'_> {
      * assert!(decoder.is_empty());
      * ```
      */
-    pub fn get<F: GetFromDecoder>(&mut self) -> Result<F, DecodeError> {
+    pub fn get<F: GetFromDecoder>(&self) -> Result<F, DecodeError> {
         GetFromDecoder::get_from_decoder(self)
     }
 }
@@ -860,53 +870,53 @@ impl Decoder<'_> {
 /** [`GetFromDecoder`] is a trait that gets from the [`Decoder`] to the type.
  */
 pub trait GetFromDecoder: Sized {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<Self, DecodeError>;
+    fn get_from_decoder(decoder: &Decoder) -> Result<Self, DecodeError>;
 }
 
 impl GetFromDecoder for bool {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<bool, DecodeError> {
+    fn get_from_decoder(decoder: &Decoder) -> Result<bool, DecodeError> {
         decoder.get_bool()
     }
 }
 
 impl GetFromDecoder for f32 {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<f32, DecodeError> {
+    fn get_from_decoder(decoder: &Decoder) -> Result<f32, DecodeError> {
         decoder.get_f32()
     }
 }
 
 impl GetFromDecoder for f64 {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<f64, DecodeError> {
+    fn get_from_decoder(decoder: &Decoder) -> Result<f64, DecodeError> {
         decoder.get_f64()
     }
 }
 
 impl GetFromDecoder for i32 {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<i32, DecodeError> {
+    fn get_from_decoder(decoder: &Decoder) -> Result<i32, DecodeError> {
         decoder.get_i32()
     }
 }
 
 impl GetFromDecoder for i64 {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<i64, DecodeError> {
+    fn get_from_decoder(decoder: &Decoder) -> Result<i64, DecodeError> {
         decoder.get_i64()
     }
 }
 
 impl GetFromDecoder for u32 {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<u32, DecodeError> {
+    fn get_from_decoder(decoder: &Decoder) -> Result<u32, DecodeError> {
         decoder.get_u32()
     }
 }
 
 impl GetFromDecoder for u64 {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<u64, DecodeError> {
+    fn get_from_decoder(decoder: &Decoder) -> Result<u64, DecodeError> {
         decoder.get_u64()
     }
 }
 
 impl GetFromDecoder for usize {
-    fn get_from_decoder(decoder: &mut Decoder) -> Result<usize, DecodeError> {
+    fn get_from_decoder(decoder: &Decoder) -> Result<usize, DecodeError> {
         decoder.get_usize()
     }
 }
