@@ -5,5 +5,6 @@ extern crate num_derive;
 
 pub mod checksum;
 pub mod endian;
+pub mod nv;
 pub mod phys;
 pub mod xdr;
