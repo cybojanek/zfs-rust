@@ -69,34 +69,19 @@ impl Decoder<'_> {
         }
     }
 
-    /** Checks if there are enough bytes to consume from the data slice.
+    /** Checks if there are enough bytes to decode from the data slice.
      *
      * # Errors
      *
-     * Returns [`DecodeError`] if there are enough bytes available, or internal
-     * offset is malformed.
+     * Returns [`DecodeError`] if there are not enough bytes to decode.
      */
     fn check_need(&self, count: usize) -> Result<(), DecodeError> {
-        // Safely compute bytes remaining.
-        let offset = self.offset.get();
-        let length = self.data.len();
-        let remaining = match length.checked_sub(offset) {
-            Some(v) => v,
-            None => {
-                return Err(DecodeError::InvalidOffset {
-                    offset: offset,
-                    length: length,
-                })
-            }
-        };
-
-        // Check if there are enough remaining.
-        if remaining >= count {
+        if self.len() >= count {
             Ok(())
         } else {
             Err(DecodeError::EndOfInput {
-                offset: offset,
-                length: length,
+                offset: self.offset.get(),
+                length: self.data.len(),
                 count: count,
             })
         }
@@ -231,6 +216,24 @@ impl Decoder<'_> {
         self.check_need(length)?;
         self.offset.set(self.offset.get() + length);
         self.consume_padding()?;
+        Ok(())
+    }
+
+    /** Rewinds `count` bytes.
+     *
+     * # Errors
+     *
+     * Returns [`DecodeError`] if there are not enough bytes to rewind.
+     */
+    pub fn rewind(&self, count: usize) -> Result<(), DecodeError> {
+        let offset = self.offset.get();
+        if count > offset {
+            return Err(DecodeError::RewindPastStart {
+                offset: offset,
+                count: count,
+            });
+        }
+        self.offset.set(offset - count);
         Ok(())
     }
 
@@ -1327,6 +1330,13 @@ pub enum DecodeError {
         err: num::TryFromIntError,
     },
 
+    /** Rewind past start.
+     *
+     * - `offset` - Byte offset of data.
+     * - `count`  - Number of bytes needed to rewind.
+     */
+    RewindPastStart { offset: usize, count: usize },
+
     /** Size conversion error from [`u32`] to [`u16`].
      *
      * - `offset` - Byte offset of data.
@@ -1390,6 +1400,9 @@ impl fmt::Display for DecodeError {
                     f,
                     "XDR i16 conversion error at offset {offset}, value {value} err {err}"
                 )
+            }
+            DecodeError::RewindPastStart { offset, count } => {
+                write!(f, "XDR rewind at offset {offset}, need {count} bytes")
             }
             DecodeError::U8Conversion { offset, value, err } => {
                 write!(
