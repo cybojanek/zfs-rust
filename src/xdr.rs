@@ -4,6 +4,7 @@
  * numbers and strings to bytes.
  *
  * - Boolean values are encoded as the number 0 [`false`], 1 [`true`].
+ * - Numbers smaller than 32 bits are encoded as [`i32`] or [`u32`].
  * - Numbers are encoded in big endian format.
  * - Strings and byte arrays are encoded as a length followed by the bytes,
  *   padded to a multiple of four. The length does not include the padding.
@@ -494,6 +495,152 @@ impl Decoder<'_> {
         Ok(f64::from_be_bytes(bytes))
     }
 
+    /** Decodes an [`i32`] and casts it to an [`i8`].
+     *
+     * # Errors
+     *
+     * Returns [`DecodeError`] if there are not enough bytes available, or
+     * casting would be out of range for [`i8`].
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0xff, 0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Decode values.
+     * let a = decoder.get_i8().unwrap();
+     * let b = decoder.get_i8().unwrap();
+     *
+     * assert_eq!(a, -128);
+     * assert_eq!(b, 127);
+     * ```
+     *
+     * Truncated bytes:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0xff, 0xff, 0xff];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 4 bytes.
+     * assert!(decoder.get_i8().is_err());
+     * ```
+     *
+     * Out of range:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0xff, 0xff, 0xff, 0x7f, 0x00, 0x00, 0x00, 0x80];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Out of range.
+     * assert!(decoder.get_i8().is_err());
+     * assert!(decoder.get_i8().is_err());
+     * ```
+     */
+    pub fn get_i8(&self) -> Result<i8, DecodeError> {
+        let offset = self.offset.get();
+        let value = self.get_i32()?;
+
+        match i8::try_from(value) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(DecodeError::I8Conversion {
+                offset: offset,
+                value: value,
+                err: e,
+            }),
+        }
+    }
+
+    /** Decodes an [`i32`] and casts it to an [`i16`].
+     *
+     * # Errors
+     *
+     * Returns [`DecodeError`] if there are not enough bytes available, or
+     * casting would be out of range for [`i16`].
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0xff, 0xff, 0x80, 0x00, 0x00, 0x00, 0x7f, 0xff];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Decode values.
+     * let a = decoder.get_i16().unwrap();
+     * let b = decoder.get_i16().unwrap();
+     *
+     * assert_eq!(a, -32768);
+     * assert_eq!(b, 32767);
+     * ```
+     *
+     * Truncated bytes:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0xff, 0xff, 0x80];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 4 bytes.
+     * assert!(decoder.get_i16().is_err());
+     * ```
+     *
+     * Out of range:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0xff, 0xff, 0x7f, 0xff, 0x00, 0x00, 0x80, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Out of range.
+     * assert!(decoder.get_i16().is_err());
+     * assert!(decoder.get_i16().is_err());
+     * ```
+     */
+    pub fn get_i16(&self) -> Result<i16, DecodeError> {
+        let offset = self.offset.get();
+        let value = self.get_i32()?;
+
+        match i16::try_from(value) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(DecodeError::I16Conversion {
+                offset: offset,
+                value: value,
+                err: e,
+            }),
+        }
+    }
+
     /** Decodes an [`i32`].
      *
      * # Errors
@@ -589,6 +736,146 @@ impl Decoder<'_> {
     pub fn get_i64(&self) -> Result<i64, DecodeError> {
         let bytes = self.get_8_bytes()?;
         Ok(i64::from_be_bytes(bytes))
+    }
+
+    /** Decodes an [`u32`] and casts it to an [`u8`].
+     *
+     * # Errors
+     *
+     * Returns [`DecodeError`] if there are not enough bytes available, or
+     * casting would be out of range for [`u8`].
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0x00, 0xff];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Decode values.
+     * let a = decoder.get_u8().unwrap();
+     *
+     * assert_eq!(a, 255);
+     * ```
+     *
+     * Truncated bytes:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 4 bytes.
+     * assert!(decoder.get_u8().is_err());
+     * ```
+     *
+     * Out of range:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0x01, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Out of range.
+     * assert!(decoder.get_u8().is_err());
+     * ```
+     */
+    pub fn get_u8(&self) -> Result<u8, DecodeError> {
+        let offset = self.offset.get();
+        let value = self.get_u32()?;
+
+        match u8::try_from(value) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(DecodeError::U8Conversion {
+                offset: offset,
+                value: value,
+                err: e,
+            }),
+        }
+    }
+
+    /** Decodes an [`u32`] and casts it to an [`u16`].
+     *
+     * # Errors
+     *
+     * Returns [`DecodeError`] if there are not enough bytes available, or
+     * casting would be out of range for [`u16`].
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0xff, 0xff];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Decode values.
+     * let a = decoder.get_u16().unwrap();
+     *
+     * assert_eq!(a, 65535);
+     * ```
+     *
+     * Truncated bytes:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 4 bytes.
+     * assert!(decoder.get_u16().is_err());
+     * ```
+     *
+     * Out of range:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x01, 0x00, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Out of range.
+     * assert!(decoder.get_u16().is_err());
+     * ```
+     */
+    pub fn get_u16(&self) -> Result<u16, DecodeError> {
+        let offset = self.offset.get();
+        let value = self.get_u32()?;
+
+        match u16::try_from(value) {
+            Ok(v) => Ok(v),
+            Err(e) => Err(DecodeError::U16Conversion {
+                offset: offset,
+                value: value,
+                err: e,
+            }),
+        }
     }
 
     /** Decodes a [`u32`].
@@ -727,7 +1014,7 @@ impl Decoder<'_> {
 
         match usize::try_from(value) {
             Ok(v) => Ok(v),
-            Err(e) => Err(DecodeError::SizeConversion {
+            Err(e) => Err(DecodeError::UsizeConversion {
                 offset: offset,
                 value: value,
                 err: e,
@@ -838,6 +1125,10 @@ impl Decoder<'_> {
      * // Some bytes.
      * let data = &[
      *     0x00, 0x00, 0x00, 0x01,                         // bool
+     *     0xff, 0xff, 0xff, 0x80,                         // i8
+     *     0x00, 0x00, 0x00, 0x7f,                         // u8
+     *     0xff, 0xff, 0x80, 0x00,                         // i16
+     *     0x00, 0x00, 0x7f, 0xff,                         // u16
      *     0xed, 0xcb, 0xa9, 0x88,                         // i32
      *     0xf2, 0x34, 0x56, 0x78,                         // u32
      *     0xed, 0xcb, 0xa9, 0x87, 0x65, 0x43, 0x21, 0x10, // i64
@@ -850,18 +1141,26 @@ impl Decoder<'_> {
      *
      * // Decode values.
      * let a: bool = decoder.get().unwrap();
-     * let b: i32 = decoder.get().unwrap();
-     * let c: u32 = decoder.get().unwrap();
-     * let d: i64 = decoder.get().unwrap();
-     * let e: u64 = decoder.get().unwrap();
-     * let f: usize = decoder.get().unwrap();
+     * let b: i8 = decoder.get().unwrap();
+     * let c: u8 = decoder.get().unwrap();
+     * let d: i16 = decoder.get().unwrap();
+     * let e: u16 = decoder.get().unwrap();
+     * let f: i32 = decoder.get().unwrap();
+     * let g: u32 = decoder.get().unwrap();
+     * let h: i64 = decoder.get().unwrap();
+     * let i: u64 = decoder.get().unwrap();
+     * let j: usize = decoder.get().unwrap();
      *
      * assert_eq!(a, true);
-     * assert_eq!(b, -0x12345678);
-     * assert_eq!(c, 0xf2345678);
-     * assert_eq!(d, -0x123456789abcdef0);
-     * assert_eq!(e, 0xf23456789abcdef0);
-     * assert_eq!(f, 0xf2345678);
+     * assert_eq!(b, -128);
+     * assert_eq!(c, 127);
+     * assert_eq!(d, -32768);
+     * assert_eq!(e, 32767);
+     * assert_eq!(f, -0x12345678);
+     * assert_eq!(g, 0xf2345678);
+     * assert_eq!(h, -0x123456789abcdef0);
+     * assert_eq!(i, 0xf23456789abcdef0);
+     * assert_eq!(j, 0xf2345678);
      *
      * assert!(decoder.is_empty());
      * ```
@@ -897,6 +1196,18 @@ impl GetFromDecoder for f64 {
     }
 }
 
+impl GetFromDecoder for i8 {
+    fn get_from_decoder(decoder: &Decoder) -> Result<i8, DecodeError> {
+        decoder.get_i8()
+    }
+}
+
+impl GetFromDecoder for i16 {
+    fn get_from_decoder(decoder: &Decoder) -> Result<i16, DecodeError> {
+        decoder.get_i16()
+    }
+}
+
 impl GetFromDecoder for i32 {
     fn get_from_decoder(decoder: &Decoder) -> Result<i32, DecodeError> {
         decoder.get_i32()
@@ -906,6 +1217,18 @@ impl GetFromDecoder for i32 {
 impl GetFromDecoder for i64 {
     fn get_from_decoder(decoder: &Decoder) -> Result<i64, DecodeError> {
         decoder.get_i64()
+    }
+}
+
+impl GetFromDecoder for u8 {
+    fn get_from_decoder(decoder: &Decoder) -> Result<u8, DecodeError> {
+        decoder.get_u8()
+    }
+}
+
+impl GetFromDecoder for u16 {
+    fn get_from_decoder(decoder: &Decoder) -> Result<u16, DecodeError> {
+        decoder.get_u16()
     }
 }
 
@@ -971,12 +1294,56 @@ pub enum DecodeError {
         err: core::str::Utf8Error,
     },
 
+    /** Size conversion error from [`i32`] to [`i8`].
+     *
+     * - `offset` - Byte offset of data.
+     * - `value`  - Value of failed conversion.
+     */
+    I8Conversion {
+        offset: usize,
+        value: i32,
+        err: num::TryFromIntError,
+    },
+
+    /** Size conversion error from [`i32`] to [`i16`].
+     *
+     * - `offset` - Byte offset of data.
+     * - `value`  - Value of failed conversion.
+     */
+    I16Conversion {
+        offset: usize,
+        value: i32,
+        err: num::TryFromIntError,
+    },
+
+    /** Size conversion error from [`u32`] to [`u8`].
+     *
+     * - `offset` - Byte offset of data.
+     * - `value`  - Value of failed conversion.
+     */
+    U8Conversion {
+        offset: usize,
+        value: u32,
+        err: num::TryFromIntError,
+    },
+
+    /** Size conversion error from [`u32`] to [`u16`].
+     *
+     * - `offset` - Byte offset of data.
+     * - `value`  - Value of failed conversion.
+     */
+    U16Conversion {
+        offset: usize,
+        value: u32,
+        err: num::TryFromIntError,
+    },
+
     /** Size conversion error from [`u32`] to [`usize`].
      *
      * - `offset` - Byte offset of data.
      * - `value`  - Value of failed conversion.
      */
-    SizeConversion {
+    UsizeConversion {
         offset: usize,
         value: u32,
         err: num::TryFromIntError,
@@ -1012,10 +1379,34 @@ impl fmt::Display for DecodeError {
                     "XDR invalid UTF8 str of length {length} at offset {offset} err {err}"
                 )
             }
-            DecodeError::SizeConversion { offset, value, err } => {
+            DecodeError::I8Conversion { offset, value, err } => {
                 write!(
                     f,
-                    "XDR size conversion error at offset {offset}, value {value} err {err}"
+                    "XDR i8 conversion error at offset {offset}, value {value} err {err}"
+                )
+            }
+            DecodeError::I16Conversion { offset, value, err } => {
+                write!(
+                    f,
+                    "XDR i16 conversion error at offset {offset}, value {value} err {err}"
+                )
+            }
+            DecodeError::U8Conversion { offset, value, err } => {
+                write!(
+                    f,
+                    "XDR u8 conversion error at offset {offset}, value {value} err {err}"
+                )
+            }
+            DecodeError::U16Conversion { offset, value, err } => {
+                write!(
+                    f,
+                    "XDR u16 conversion error at offset {offset}, value {value} err {err}"
+                )
+            }
+            DecodeError::UsizeConversion { offset, value, err } => {
+                write!(
+                    f,
+                    "XDR usize conversion error at offset {offset}, value {value} err {err}"
                 )
             }
         }
@@ -1031,7 +1422,27 @@ impl error::Error for DecodeError {
                 length: _,
                 err,
             } => Some(err),
-            DecodeError::SizeConversion {
+            DecodeError::I8Conversion {
+                offset: _,
+                value: _,
+                err,
+            } => Some(err),
+            DecodeError::I16Conversion {
+                offset: _,
+                value: _,
+                err,
+            } => Some(err),
+            DecodeError::U8Conversion {
+                offset: _,
+                value: _,
+                err,
+            } => Some(err),
+            DecodeError::U16Conversion {
+                offset: _,
+                value: _,
+                err,
+            } => Some(err),
+            DecodeError::UsizeConversion {
                 offset: _,
                 value: _,
                 err,
