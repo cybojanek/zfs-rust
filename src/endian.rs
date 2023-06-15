@@ -942,6 +942,20 @@ impl Encoder<'_> {
         Ok(())
     }
 
+    /** Encodes a [`u8`].
+     *
+     * # Errors
+     *
+     * Returns [`EncodeError`] if there are not enough bytes available.
+     */
+    pub fn put_u8(&mut self, value: u8) -> Result<(), EncodeError> {
+        self.check_need(1)?;
+        self.data[self.offset] = value;
+        self.offset += 1;
+
+        Ok(())
+    }
+
     /** Encodes a [`u16`].
      *
      * # Errors
