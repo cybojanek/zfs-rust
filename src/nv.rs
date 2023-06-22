@@ -56,6 +56,7 @@ use core::result::Result::{Err, Ok};
 use std::error;
 
 extern crate strum;
+use enum_as_inner::EnumAsInner;
 
 use crate::endian::Endian;
 use crate::xdr;
@@ -214,7 +215,7 @@ pub struct List<'a> {
 ////////////////////////////////////////////////////////////////////////////////
 
 // Decoded Name Value Pair Data Value.
-#[derive(Debug)]
+#[derive(Debug, EnumAsInner)]
 pub enum DecodedDataValue<'a> {
     Boolean(),
 
