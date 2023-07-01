@@ -754,7 +754,87 @@ impl Decoder<'_> {
         // NOTE(cybojanek): Ignore return.
         let _ = self.decoder.skip(8);
     }
+
+    /** Finds the name value pair by name.
+     *
+     * Returns [`None`] if the pair is not found.
+     * Resets the decoder prior to searching.
+     */
+    pub fn find<'a, 'b>(&'a self, name: &'b str) -> Result<Option<DecodedPair<'a>>, DecodeError> {
+        // Reset decoder to start.
+        self.reset();
+
+        loop {
+            // Get next pair.
+            let pair = self.next_pair()?;
+
+            // Check if its the end of the list.
+            let pair = match pair {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+
+            // Return if name matches.
+            if pair.name == name {
+                return Ok(Some(pair));
+            }
+        }
+    }
 }
+
+macro_rules! find_optional {
+    ($decoder:expr, $name:expr,  $data_value_type:tt, $error:tt) => {{
+        // Find the pair.
+        let result = $decoder.find($name)?;
+
+        match result {
+            Some(pair) => {
+                // Get the data type in case of an error.
+                let data_type = pair.data_type();
+
+                // Check the value type.
+                match pair.value {
+                    // It matches! Ok.
+                    nv::DecodedDataValue::$data_value_type(v) => Ok(Some(v)),
+                    // It does not match - error.
+                    _ => Err($error::ValueTypeMismatch {
+                        name: $name,
+                        data_type: data_type,
+                    }),
+                }
+            }
+            // If not found, then return None.
+            None => Ok(None),
+        }
+    }};
+}
+
+pub(crate) use find_optional;
+
+macro_rules! find_require {
+    ($decoder:expr, $name:expr,  $data_value_type:tt, $error:tt) => {{
+        // Find the pair, or return error that it is missing.
+        let pair = $decoder
+            .find($name)?
+            .ok_or($error::MissingValue { name: $name })?;
+
+        // Get the data type in case of an error.
+        let data_type = pair.data_type();
+
+        // Check the value type.
+        match pair.value {
+            // It matches! Ok.
+            nv::DecodedDataValue::$data_value_type(v) => Ok(v),
+            // It does not match - error.
+            _ => Err($error::ValueTypeMismatch {
+                name: $name,
+                data_type: data_type,
+            }),
+        }
+    }};
+}
+
+pub(crate) use find_require;
 
 ////////////////////////////////////////////////////////////////////////////////
 
