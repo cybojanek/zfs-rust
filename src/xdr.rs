@@ -26,10 +26,19 @@ use std::error;
 
 /** An XDR decoder.
  */
-#[derive(Debug)]
 pub struct Decoder<'a> {
     data: &'a [u8],
     offset: Cell<usize>,
+}
+
+impl fmt::Debug for Decoder<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Change debug printing to print length instead of raw data.
+        f.debug_struct("Decoder")
+            .field("length", &self.data.len())
+            .field("offset", &self.offset.get())
+            .finish()
+    }
 }
 
 impl Decoder<'_> {
