@@ -76,6 +76,17 @@ pub struct Decoder<'a> {
     decoder: EndianDecoder,
 }
 
+impl fmt::Debug for Decoder<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Change debug printing to print length instead of raw data.
+        f.debug_struct("Decoder")
+            .field("length", &self.data.len())
+            .field("offset", &self.offset.get())
+            .field("endian", &self.decoder.endian)
+            .finish()
+    }
+}
+
 impl Decoder<'_> {
     /** Initializes a [`Decoder`] based on the supplied [`Endian`] value.
      *
@@ -705,6 +716,17 @@ pub struct Encoder<'a> {
     data: &'a mut [u8],
     offset: usize,
     encoder: EndianEncoder,
+}
+
+impl fmt::Debug for Encoder<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Change debug printing to print length instead of raw data.
+        f.debug_struct("Encoder")
+            .field("length", &self.data.len())
+            .field("offset", &self.offset)
+            .field("endian", &self.encoder.endian)
+            .finish()
+    }
 }
 
 impl Encoder<'_> {
