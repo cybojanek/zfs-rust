@@ -8,6 +8,7 @@ mod dnode;
 mod dva;
 mod label;
 mod object_set;
+mod pool;
 mod sector;
 mod uber_block;
 mod zil_header;
@@ -25,5 +26,8 @@ pub use label::{
     Label, LabelDecode, LabelOffsetError,
 };
 pub use object_set::{ObjectSet, ObjectSetDecodeError, ObjectSetEncodeError, ObjectSetType};
+pub use pool::{
+    Pool, PoolDecodeError, PoolFeaturesForRead, PoolHealth, PoolHost, PoolState, PoolVersion,
+};
 pub use uber_block::{UberBlock, UberBlockDecodeError, UberBlockEncodeError};
 pub use zil_header::{ZilHeader, ZilHeaderDecodeError, ZilHeaderEncodeError};
