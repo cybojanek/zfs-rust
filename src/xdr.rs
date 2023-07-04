@@ -150,6 +150,34 @@ impl Decoder<'_> {
         self.data.len()
     }
 
+    /** Returns the current offset into the source data.
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * let data = &[
+     *     0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+     *     0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+     * ];
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * assert_eq!(decoder.offset(), 0);
+     * decoder.get_u64();
+     *
+     * assert_eq!(decoder.offset(), 8);
+     * decoder.get_u64();
+     *
+     * assert_eq!(decoder.offset(), 16);
+     * ```
+     */
+    pub fn offset(&self) -> usize {
+        self.offset.get()
+    }
+
     /** Returns true if there are no more bytes to decode.
      *
      * # Examples
@@ -210,16 +238,164 @@ impl Decoder<'_> {
         }
     }
 
-    /// Resets the decoder to the start of the data.
+    /** Resets the decoder to the start of the data.
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Decode value.
+     * let a = decoder.get_bool().unwrap();
+     *
+     * // Reset.
+     * decoder.reset();
+     *
+     * // Decode value.
+     * let b = decoder.get_bool().unwrap();
+     *
+     * assert_eq!(a, true);
+     * assert_eq!(b, true);
+     * ```
+     */
     pub fn reset(&self) {
         self.offset.set(0);
     }
 
+    /** Seeks the decoder to the specified offset of the data.
+     *
+     * Consumes padding for alignment.
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Decode values.
+     * let a = decoder.get_bool().unwrap();
+     * let b = decoder.get_bool().unwrap();
+     *
+     * // Seek.
+     * decoder.seek(4).unwrap();
+     *
+     * // Decode value.
+     * let c = decoder.get_bool().unwrap();
+     *
+     * assert_eq!(a, true);
+     * assert_eq!(b, false);
+     * assert_eq!(c, false);
+     * ```
+     *
+     * Truncated:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x12, 0x34, 0x56, 0x78, 0x61, 0x62, 0x63];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 1 more byte for padding.
+     * assert!(decoder.seek(8).is_err());
+     * ```
+     *
+     * Truncated padding:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x12, 0x34, 0x56, 0x78, 0x61, 0x62, 0x63];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 1 more byte for padding.
+     * assert!(decoder.seek(7).is_err());
+     * ```
+     */
+    pub fn seek(&self, offset: usize) -> Result<(), DecodeError> {
+        self.reset();
+        self.skip(offset)
+    }
+
     /** Skips length number of bytes.
+     *
+     * Consumes padding for alignment.
      *
      * # Errors
      *
      * Returns [`DecodeError`] if there are not enough bytes available.
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Skip 4 bytes.
+     * decoder.skip(4).unwrap();
+     *
+     * // Decode value.
+     * let a = decoder.get_bool().unwrap();
+     *
+     * assert_eq!(a, false);
+     * ```
+     *
+     * Truncated:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x12, 0x34, 0x56, 0x78, 0x61, 0x62, 0x63];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 1 more byte for padding.
+     * assert!(decoder.skip(8).is_err());
+     * ```
+     *
+     * Truncated padding:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x12, 0x34, 0x56, 0x78, 0x61, 0x62, 0x63];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 1 more byte for padding.
+     * assert!(decoder.skip(7).is_err());
+     * ```
      */
     pub fn skip(&self, length: usize) -> Result<(), DecodeError> {
         self.check_need(length)?;
@@ -230,9 +406,52 @@ impl Decoder<'_> {
 
     /** Rewinds `count` bytes.
      *
+     * Consumes padding for alignment.
+     *
      * # Errors
      *
      * Returns [`DecodeError`] if there are not enough bytes to rewind.
+     *
+     * # Examples
+     *
+     * Basic usage:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Decode value.
+     * let a = decoder.get_bool().unwrap();
+     *
+     * // Rewind 4 bytes.
+     * decoder.rewind(4).unwrap();
+     *
+     * // Decode value.
+     * let b = decoder.get_bool().unwrap();
+     *
+     * assert_eq!(a, true);
+     * assert_eq!(a, true);
+     * ```
+     *
+     * Rewind past start:
+     *
+     * ```
+     * use zfs::xdr::Decoder;
+     *
+     * // Some bytes.
+     * let data = &[0x12, 0x34, 0x56, 0x78, 0x61, 0x62, 0x63, 0x64];
+     *
+     * // Create decoder.
+     * let decoder = Decoder::from_bytes(data);
+     *
+     * // Need 1 more byte for padding.
+     * assert!(decoder.rewind(1).is_err());
+     * ```
      */
     pub fn rewind(&self, count: usize) -> Result<(), DecodeError> {
         let offset = self.offset.get();
@@ -243,6 +462,11 @@ impl Decoder<'_> {
             });
         }
         self.offset.set(offset - count);
+
+        // NOTE(cybojanek): The following should never fail, because if we
+        //                  got to offset, then padding must be ok.
+        self.consume_padding()?;
+
         Ok(())
     }
 
