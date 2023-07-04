@@ -7,7 +7,7 @@ use std::error;
 
 use crate::checksum::{label_verify, LabelVerifyError};
 use crate::endian::{DecodeError, Decoder, Endian};
-use crate::phys::{BlockPointer, BlockPointerDecodeError, ChecksumTail};
+use crate::phys::{BlockPointer, BlockPointerDecodeError};
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -15,6 +15,36 @@ use crate::phys::{BlockPointer, BlockPointerDecodeError, ChecksumTail};
  *
  * - Bytes: 1024
  * - C reference: `struct uberblock`
+ *
+ * ```text
+ * +------------------+-----+
+ * |            magic |   8 |
+ * +------------------+-----+
+ * |          version |   8 |
+ * +------------------+-----+
+ * |              txg |   8 |
+ * +------------------+-----+
+ * |         guid sum |   8 |
+ * +------------------+-----+
+ * |        timestamp |   8 |
+ * +------------------+-----+
+ * |    block pointer | 128 |
+ * +------------------+-----+
+ * | software version |   8 |
+ * +------------------+-----+
+ * |        mmp magic |   8 |
+ * +------------------+-----+
+ * |        mmp delay |   8 |
+ * +------------------+-----+
+ * |       mmp config |   8 |
+ * +------------------+-----+
+ * |   checkpoint txg |   8 |
+ * +------------------+-----+
+ * |          padding | 776 |
+ * +------------------+-----+
+ * |    checksum tail |  40 |
+ * +------------------+-----+
+ * ```
  */
 #[derive(Debug)]
 pub struct UberBlock {
@@ -44,7 +74,7 @@ impl UberBlock {
      *
      * # Errors
      *
-     * Returns [`DecodeError`] if there are not enough bytes, or magic is invalid.
+     * Returns [`UberBlockDecodeError`] if there are not enough bytes, or magic is invalid.
      */
     pub fn from_bytes(
         bytes: &[u8; UberBlock::LENGTH],
@@ -115,12 +145,7 @@ impl UberBlock {
 
         // Check that the rest of the uber block (up to the checksum at the tail)
         // is all zeroes.
-        while decoder.len() > ChecksumTail::LENGTH {
-            let padding = decoder.get_u64()?;
-            if padding != 0 {
-                return Err(UberBlockDecodeError::NonZeroPadding { padding: padding });
-            }
-        }
+        decoder.skip_zero_padding(776)?;
 
         Ok(UberBlock {
             checkpoint_txg: checkpoint_txg,
@@ -177,12 +202,6 @@ pub enum UberBlockDecodeError {
      * - `config` - MMP config.
      */
     NonZeroMmpValues { delay: u64, config: u64 },
-
-    /** Non-zero padding.
-     *
-     * - `padding` - Non-zero padding value.
-     */
-    NonZeroPadding { padding: u64 },
 }
 
 impl From<BlockPointerDecodeError> for UberBlockDecodeError {
@@ -225,12 +244,6 @@ impl fmt::Display for UberBlockDecodeError {
                 write!(
                     f,
                     "Uber Block decode error: non-zero MMP values delay 0x{delay:016x} config 0x{config:016x} for MMP magic 0"
-                )
-            }
-            UberBlockDecodeError::NonZeroPadding { padding } => {
-                write!(
-                    f,
-                    "Uber Block decode error: non-zero padding for 0x{padding:016x}"
                 )
             }
         }

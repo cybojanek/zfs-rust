@@ -1,6 +1,6 @@
 use core::fmt;
 use core::result::Result;
-use core::result::Result::{Err, Ok};
+use core::result::Result::Ok;
 
 #[cfg(feature = "std")]
 use std::error;
@@ -16,27 +16,21 @@ use crate::phys::{BlockPointer, BlockPointerDecodeError};
  * - C reference: `typedef struct zil_header zil_header_t`
  *
  * ```text
- *        6                   5                   4                   3                   2                   1                   0
- *  3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                         claim_txg (64)                                                        |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                        replay_seq (64)                                                        |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                           log (1024)                                                          |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                       claim_blk_seq (64)                                                      |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                           flags (64)                                                          |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                       claim_lr_seq (64)                                                       |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                                                                                               |
- * |                                                         padding (192)                                                         |
- * |                                                                                                                               |
- * +-------------------------------------------------------------------------------------------------------------------------------+
+ * +---------------+-----+
+ * |     claim_txg |   8 |
+ * +---------------+-----+
+ * |    replay_seq |   8 |
+ * +---------------+-----+
+ * |           log | 128 |
+ * +---------------+-----+
+ * | claim_blk_seq |   8 |
+ * +---------------+-----+
+ * |         flags |   8 |
+ * +---------------+-----+
+ * |  claim_lr_seq |   8 |
+ * +---------------+-----+
+ * |       padding |  24 |
+ * +---------------+-----+
  * ```
  */
 #[derive(Debug)]
@@ -69,12 +63,7 @@ impl ZilHeader {
             claim_lr_seq: decoder.get_u64()?,
         };
 
-        for _ in 0..3 {
-            let padding = decoder.get_u64()?;
-            if padding != 0 {
-                return Err(ZilHeaderDecodeError::NonZeroPadding { padding: padding });
-            }
-        }
+        decoder.skip_zero_padding(24)?;
 
         Ok(zil_header)
     }
@@ -95,12 +84,6 @@ pub enum ZilHeaderDecodeError {
      * - `err` - [`DecodeError`]
      */
     EndianDecodeError { err: DecodeError },
-
-    /** Non-zero padding.
-     *
-     * - `padding` - Non-zero padding value.
-     */
-    NonZeroPadding { padding: u64 },
 }
 
 impl From<BlockPointerDecodeError> for ZilHeaderDecodeError {
@@ -123,12 +106,6 @@ impl fmt::Display for ZilHeaderDecodeError {
             }
             ZilHeaderDecodeError::EndianDecodeError { err } => {
                 write!(f, "Zil Header Endian decode error: {err}")
-            }
-            ZilHeaderDecodeError::NonZeroPadding { padding } => {
-                write!(
-                    f,
-                    "Zil Header decode error: non-zero padding for 0x{padding:016x}"
-                )
             }
         }
     }

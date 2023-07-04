@@ -42,66 +42,53 @@ pub enum ObjectSetType {
 /** Object set.
  *
  * - Bytes:
- *   - V1: 1024
- *   - V2: 2048
- *   - V3: 4096
+ *   - V1 - V14: 1024
+ *   - V15 - V28: 2048
+ *   - V5000: 4096
  * - C reference: `struct objset_phys objset_phys_t`
  *
  * ```text
- *        6                   5                   4                   3                   2                   1                   0
- *  3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                          dnode (4096)                                                         |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                       zil_header (1536)                                                       |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                           flags (64)                                                          |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                   portable_mac[0..32] (256)                                                   |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                     local_mac[0..32] (256)                                                    |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                   padding[0..240] (1920) v1                                                   |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                   user_used dnode (4096) v2                                                   |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                  group_used dnode (4096) v2                                                   |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                 project_used dnode (4096) v3                                                  |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * |                                                              ...                                                              |
- * |                                                    padding[0..1536] (12288)                                                   |
- * |                                                              ...                                                              |
- * +-------------------------------------------------------------------------------------------------------------------------------+
- * ```
+ * vN: filesystem version
+ *
+ * +--------------+------+-------+
+ * |      os_meta |  512 |    v1 |
+ * +--------------+------+-------+
+ * |   zil_header |  192 |    v1 |
+ * +--------------+------+-------+
+ * |         type |    8 |    v1 |
+ * +--------------+------+-------+
+ * |        flags |    8 |   v15 |
+ * +--------------+------+-------+------------+
+ * | portable_mac |   32 | v5000 | encryption |
+ * +--------------+------+-------+------------+
+ * |    local_mac |   32 | v5000 | encryption |
+ * +--------------+------+-------+------------+
+ * |      padding |  240 |    v1 |
+ * +--------------+------+-------+
+ * |    user_used |  512 |   v15 |
+ * +--------------+------+-------+
+ * |   group_used |  512 |   v15 |
+ * +--------------+------+-------+---------------+
+ * | project_used |  512 | v5000 | project quota |
+ * +--------------+------+-------+---------------+
+ * |      padding | 1536 | v5000 | project quota |
+ * +--------------+------+-------+---------------+
  */
 #[derive(Debug)]
 pub struct ObjectSet {
-    pub os_meta_dnode: Dnode,
+    pub os_meta: Dnode,
+
     pub zil_header: ZilHeader,
+
     pub os_type: ObjectSetType,
+
     pub user_accounting_complete: bool,
     pub user_object_accounting_complete: bool,
     pub project_quota_complete: bool,
+
     pub portable_mac: [u8; ObjectSet::MAC_LEN],
     pub local_mac: [u8; ObjectSet::MAC_LEN],
+
     pub extension: ObjectSetExtension,
 }
 
@@ -142,7 +129,7 @@ impl ObjectSet {
      * Returns [`DecodeError`] if there are not enough bytes, or magic is invalid.
      */
     pub fn from_decoder(decoder: &mut Decoder) -> Result<ObjectSet, ObjectSetDecodeError> {
-        let os_meta_dnode = Dnode::from_decoder(decoder)?;
+        let os_meta = Dnode::from_decoder(decoder)?;
         let zil_header = ZilHeader::from_decoder(decoder)?;
 
         // Decode object set type.
@@ -163,12 +150,7 @@ impl ObjectSet {
         let local_mac = decoder.get_bytes(ObjectSet::MAC_LEN)?.try_into().unwrap();
 
         // Padding up to LENGTH_V1.
-        for _ in 0..30 {
-            let padding = decoder.get_u64()?;
-            if padding != 0 {
-                return Err(ObjectSetDecodeError::NonZeroPadding { padding: padding });
-            }
-        }
+        decoder.skip_zero_padding(240)?;
 
         // Check for extensions based on length.
         let mut extension = ObjectSetExtension::None {};
@@ -193,24 +175,22 @@ impl ObjectSet {
                 };
 
                 // Padding up to LENGTH_V3.
-                for _ in 0..192 {
-                    let padding = decoder.get_u64()?;
-                    if padding != 0 {
-                        return Err(ObjectSetDecodeError::NonZeroPadding { padding: padding });
-                    }
-                }
+                decoder.skip_zero_padding(1536)?;
             }
         }
 
         Ok(ObjectSet {
-            os_meta_dnode: os_meta_dnode,
+            os_meta: os_meta,
             zil_header: zil_header,
             os_type: os_type,
+
             user_accounting_complete: (flags & FLAG_USER_ACCOUNTING_COMPLETE) != 0,
             user_object_accounting_complete: (flags & FLAG_USER_OBJECT_ACCOUNTING_COMPLETE) != 0,
             project_quota_complete: (flags & FLAG_PROJECT_QUOTA_COMPLETE) != 0,
+
             portable_mac: portable_mac,
             local_mac: local_mac,
+
             extension: extension,
         })
     }
@@ -243,12 +223,6 @@ pub enum ObjectSetDecodeError {
      * - `os_type` - Objecct set type.
      */
     InvalidObjectSetType { os_type: u64 },
-
-    /** Non-zero padding.
-     *
-     * - `padding` - Non-zero padding value.
-     */
-    NonZeroPadding { padding: u64 },
 
     /** [`ZilHeader`] decode error.
      *
@@ -289,12 +263,6 @@ impl fmt::Display for ObjectSetDecodeError {
             }
             ObjectSetDecodeError::InvalidObjectSetType { os_type } => {
                 write!(f, "ObjectSet invalid type: {os_type}")
-            }
-            ObjectSetDecodeError::NonZeroPadding { padding } => {
-                write!(
-                    f,
-                    "ObjectSet decode error: non-zero padding for 0x{padding:016x}"
-                )
             }
             ObjectSetDecodeError::ZilHeaderDecodeError { err } => {
                 write!(f, "ObjectSet Block Zil Header decode error: {err}")

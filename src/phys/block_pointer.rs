@@ -13,7 +13,7 @@ use crate::phys::{ChecksumType, ChecksumValue, CompressionType, DmuType, Dva, Dv
 
 ////////////////////////////////////////////////////////////////////////////////
 
-/** DVA (Data Virtual Address).
+/** Block pointer.
  *
  * - Bytes: 128
  * - C reference: `typedef struct blkptr blkptr_t`
@@ -70,6 +70,17 @@ impl BlockPointer {
 /** Embedded block pointer.
  *
  * ```text
+ * +-------------------+----+
+ * |           payload | 48 |
+ * +-------------------+----+
+ * |             flags |  8 |
+ * +-------------------+----+
+ * |           payload | 24 |
+ * +-------------------+----+
+ * | logical birth txg |  8 |
+ * +-------------------+----+
+ * |           payload | 40 |
+ * +-------------------+----+
  *
  *        6                   5                   4                   3                   2                   1                   0
  *  3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
@@ -252,6 +263,34 @@ impl BlockPointerEmbedded {
 /** Encrypted block pointer.
  *
  * ```text
+ * +--------------------+----+
+ * |             dva[0] | 16 |
+ * +--------------------+----+
+ * |             dva[1] | 16 |
+ * +--------------------+----+
+ * |               salt |  8 |
+ * +--------------------+----+
+ * |                iv1 |  8 |
+ * +--------------------+----+
+ * |              flags |  8 |
+ * +--------------------+----+
+ * |            padding | 16 |
+ * +--------------------+----+
+ * | physical birth txg |  8 |
+ * +--------------------+----+
+ * |  logical birth txg |  8 |
+ * +--------------------+----+
+ * | iv2 and fill_count |  8 |
+ * +--------------------+----+
+ * |        checksum[0] |  8 |
+ * +--------------------+----+
+ * |        checksum[1] |  8 |
+ * +--------------------+----+
+ * |             mac[0] |  8 |
+ * +--------------------+----+
+ * |             mac[1] |  8 |
+ * +--------------------+----+
+ *
  *        6                   5                   4                   3                   2                   1                   0
  *  3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
  * +-------------------------------------------------------------------------------------------------------------------------------+
@@ -392,12 +431,7 @@ impl BlockPointerEncrypted {
         let physical_size = ((flags >> 16) & 0xffff) as u16;
 
         // Decode padding.
-        for _ in 0..2 {
-            let padding = decoder.get_u64()?;
-            if padding != 0 {
-                return Err(BlockPointerDecodeError::NonZeroPadding { padding: padding });
-            }
-        }
+        decoder.skip_zero_padding(16)?;
 
         let physical_birth_txg = decoder.get_u64()?;
         let logical_birth_txg = decoder.get_u64()?;
@@ -435,6 +469,26 @@ impl BlockPointerEncrypted {
 /** Regular block pointer.
  *
  * ```text
+ * +--------------------+----+
+ * |             dva[0] | 16 |
+ * +--------------------+----+
+ * |             dva[1] | 16 |
+ * +--------------------+----+
+ * |             dva[2] | 16 |
+ * +--------------------+----+
+ * |              flags |  8 |
+ * +--------------------+----+
+ * |            padding | 16 |
+ * +--------------------+----+
+ * | physical birth txg |  8 |
+ * +--------------------+----+
+ * |  logical birth txg |  8 |
+ * +--------------------+----+
+ * |         fill_count |  8 |
+ * +--------------------+----+
+ * |           checksum | 32 |
+ * +--------------------+----+
+ *
  *        6                   5                   4                   3                   2                   1                   0
  *  3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0 9 8 7 6 5 4 3 2 1 0
  * +-------------------------------------------------------------------------------------------------------------------------------+
@@ -567,12 +621,7 @@ impl BlockPointerRegular {
         let physical_size = ((flags >> 16) & 0xffff) as u16;
 
         // Decode padding.
-        for _ in 0..2 {
-            let padding = decoder.get_u64()?;
-            if padding != 0 {
-                return Err(BlockPointerDecodeError::NonZeroPadding { padding: padding });
-            }
-        }
+        decoder.skip_zero_padding(16)?;
 
         let physical_birth_txg = decoder.get_u64()?;
         let logical_birth_txg = decoder.get_u64()?;
@@ -655,12 +704,6 @@ pub enum BlockPointerDecodeError {
      * - `embedded_type` - Value.
      */
     InvalidEmbeddedType { embedded_type: u8 },
-
-    /** Non-zero padding.
-     *
-     * - `padding` - Non-zero padding value.
-     */
-    NonZeroPadding { padding: u64 },
 }
 
 impl From<DvaDecodeError> for BlockPointerDecodeError {
@@ -721,12 +764,6 @@ impl fmt::Display for BlockPointerDecodeError {
                 write!(
                     f,
                     "BlockPointer decode error: invalid embdedded type {embedded_type}"
-                )
-            }
-            BlockPointerDecodeError::NonZeroPadding { padding } => {
-                write!(
-                    f,
-                    "Block Pointer decode error: non-zero padding for 0x{padding:016x}"
                 )
             }
         }
