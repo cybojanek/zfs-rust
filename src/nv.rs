@@ -239,7 +239,7 @@ pub enum DecodedDataValue<'a> {
 
     HrTime(i64),
 
-    NvList(Decoder<'a>),
+    NvList(NestedDecoder<'a>),
     NvListArray(ArrayDecoder<'a, Decoder<'a>>),
 
     BooleanValue(bool),
@@ -262,6 +262,21 @@ pub struct Decoder<'a> {
     encoding: Encoding,
     endian: Endian,
     pub unique: Unique,
+}
+
+#[derive(Debug)]
+pub struct NestedDecoder<'a> {
+    parent: &'a Decoder<'a>,
+    decoder: Decoder<'a>,
+    offset: usize,
+    length: usize,
+}
+
+impl NestedDecoder<'_> {
+    /// Gets the nested decoder.
+    pub fn get_decoder(&self) -> &Decoder {
+        &self.decoder
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -675,12 +690,17 @@ impl Decoder<'_> {
 
             DataType::HrTime => DecodedDataValue::HrTime(self.decoder.get()?),
 
-            DataType::NvList => DecodedDataValue::NvList(Decoder::from_partial(
-                self.encoding,
-                self.endian,
-                // TODO(cybojanek): Verify length of list at this point?
-                self.decoder.get_n_bytes(bytes_rem)?,
-            )?),
+            DataType::NvList => DecodedDataValue::NvList(NestedDecoder {
+                offset: self.decoder.offset(),
+                length: bytes_rem,
+                parent: self,
+                decoder: Decoder::from_partial(
+                    self.encoding,
+                    self.endian,
+                    // TODO(cybojanek): Verify length of list at this point?
+                    self.decoder.get_n_bytes(bytes_rem)?,
+                )?,
+            }),
             DataType::NvListArray => DecodedDataValue::NvListArray(ArrayDecoder {
                 // TODO(cybojanek): Verify length of list at this point?
                 decoder: xdr::Decoder::from_bytes(self.decoder.get_n_bytes(bytes_rem)?),
@@ -785,6 +805,79 @@ impl Decoder<'_> {
             }
         }
     }
+
+    /** Finds the name value pair by name, in the nested list.
+     *
+     * Returns [`None`] if the pair is not found.
+     * Preserves main decoder offset.
+     */
+    pub fn find_nested<'a, 'b, 'c>(
+        &'a self,
+        nested: &'b NestedDecoder,
+        name: &'c str,
+    ) -> Result<Option<DecodedPair<'a>>, DecodeError> {
+        // Check decoder matches.
+        if !std::ptr::eq(self, nested.parent) {
+            return Err(DecodeError::NestedDecoderMismatch {});
+        }
+
+        // Save offset.
+        let offset = self.decoder.offset();
+
+        // Seek to start of nested list.
+        if let Err(e) = self.decoder.seek(nested.offset) {
+            let _ = self.decoder.seek(offset);
+            return Err(DecodeError::Xdr { err: e });
+        }
+
+        // Skip version and flags.
+        if let Err(e) = self.decoder.skip(8) {
+            let _ = self.decoder.seek(offset);
+            return Err(DecodeError::Xdr { err: e });
+        }
+
+        // Find pair by name.
+        let mut pair;
+
+        loop {
+            // Check for end.
+            if self.decoder.offset() - nested.offset >= nested.length {
+                pair = None;
+                break;
+            }
+
+            // Get next pair.
+            match self.next_pair() {
+                Ok(result) => {
+                    pair = result;
+
+                    // If it matches, or end of list, break.
+                    match &pair {
+                        Some(v) => {
+                            if v.name == name {
+                                break;
+                            }
+                        }
+                        None => break,
+                    }
+                }
+                Err(e) => {
+                    let _ = self.decoder.seek(offset);
+                    return Err(e);
+                }
+            }
+        }
+
+        // Check for too many bytes used.
+        if self.decoder.offset() - nested.offset > nested.length {
+            let _ = self.decoder.seek(offset);
+            return Err(DecodeError::InvalidNestedSize {});
+        }
+
+        // Reset main list offset.
+        let _ = self.decoder.seek(offset);
+        Ok(pair)
+    }
 }
 
 macro_rules! find_option {
@@ -845,6 +938,35 @@ macro_rules! find_option_bool {
 
 pub(crate) use find_option_bool;
 
+macro_rules! find_option_nested {
+    ($decoder:expr, $nested:expr, $name:expr, $data_value_type:tt, $error:tt) => {{
+        // Find the pair.
+        let result = $decoder.find_nested($nested, $name)?;
+
+        match result {
+            Some(pair) => {
+                // Get the data type in case of an error.
+                let data_type = pair.data_type();
+
+                // Check the value type.
+                match pair.value {
+                    // It matches! Ok.
+                    nv::DecodedDataValue::$data_value_type(v) => Ok(Some(v)),
+                    // It does not match - error.
+                    _ => Err($error::ValueTypeMismatch {
+                        name: $name,
+                        data_type: data_type,
+                    }),
+                }
+            }
+            // If not found, then return None.
+            None => Ok(None),
+        }
+    }};
+}
+
+pub(crate) use find_option_nested;
+
 macro_rules! find {
     ($decoder:expr, $name:expr,  $data_value_type:tt, $error:tt) => {{
         // Find the pair, or return error that it is missing.
@@ -869,6 +991,31 @@ macro_rules! find {
 }
 
 pub(crate) use find;
+
+macro_rules! find_nested {
+    ($decoder:expr, $nested:expr, $name:expr,  $data_value_type:tt, $error:tt) => {{
+        // Find the pair, or return error that it is missing.
+        let pair = $decoder
+            .find_nested($nested, $name)?
+            .ok_or($error::MissingValue { name: $name })?;
+
+        // Get the data type in case of an error.
+        let data_type = pair.data_type();
+
+        // Check the value type.
+        match pair.value {
+            // It matches! Ok.
+            nv::DecodedDataValue::$data_value_type(v) => Ok(v),
+            // It does not match - error.
+            _ => Err($error::ValueTypeMismatch {
+                name: $name,
+                data_type: data_type,
+            }),
+        }
+    }};
+}
+
+pub(crate) use find_nested;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -946,6 +1093,9 @@ pub enum DecodeError {
      */
     InvalidFlags { flags: u32 },
 
+    /** Invalid nested size. */
+    InvalidNestedSize {},
+
     /** Invalid reserved bytes.
      *
      * - `reserved` - Reserved.
@@ -957,6 +1107,9 @@ pub enum DecodeError {
      * - `version` - Version.
      */
     InvalidVersion { version: u32 },
+
+    /** Nested decoder mismatch. */
+    NestedDecoderMismatch {},
 
     /** XDR decoding error.
      *
@@ -1006,6 +1159,7 @@ impl fmt::Display for DecodeError {
             DecodeError::InvalidFlags { flags } => {
                 write!(f, "NV List invalid flags {flags}")
             }
+            DecodeError::InvalidNestedSize {} => write!(f, "NV List invalid nested size"),
             DecodeError::InvalidReservedBytes { reserved } => {
                 let a = reserved[0];
                 let b = reserved[1];
@@ -1013,6 +1167,9 @@ impl fmt::Display for DecodeError {
             }
             DecodeError::InvalidVersion { version } => {
                 write!(f, "NV List invalid version {version}")
+            }
+            DecodeError::NestedDecoderMismatch {} => {
+                write!(f, "NV List nested decoder mismatch")
             }
             DecodeError::Xdr { err } => {
                 write!(f, "NV List XDR decoding error: {err}")
