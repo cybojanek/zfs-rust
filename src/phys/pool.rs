@@ -12,6 +12,7 @@ extern crate strum;
 use fixedstr::{str16, str32};
 
 use crate::nv;
+use crate::phys::{VdevDecodeError, VdevTree};
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -210,6 +211,7 @@ impl PoolFeaturesForRead {
             Some(v) => v,
             None => return Ok(None),
         };
+        let feature_decoder = feature_decoder.get_decoder();
 
         ////////////////////////////////
         // Use macro for cleaner code.
@@ -413,6 +415,7 @@ pub struct Pool<'a> {
     pub state: PoolState,
     pub top_guid: u64,
     pub txg: u64,
+    pub vdev_tree: VdevTree<'a>,
     pub version: PoolVersion,
 
     // V1: Deprecated in V3.
@@ -523,6 +526,7 @@ impl Pool<'_> {
             },
             top_guid: find_u64!(POOL_CONFIG_TOP_GUID),
             txg: find_u64!(POOL_CONFIG_TXG),
+            vdev_tree: VdevTree::from_decoder(decoder)?,
             version: {
                 let version_number = find_u64!(POOL_CONFIG_VERSION);
                 num::FromPrimitive::from_u64(version_number).ok_or(
@@ -621,11 +625,23 @@ pub enum PoolDecodeError {
         name: &'static str,
         data_type: nv::DataType,
     },
+
+    /** Vdev decode error.
+     *
+     * - `err` - Error.
+     */
+    VdevDecodeError { err: VdevDecodeError },
 }
 
 impl From<nv::DecodeError> for PoolDecodeError {
     fn from(value: nv::DecodeError) -> Self {
         PoolDecodeError::NvDecodeError { err: value }
+    }
+}
+
+impl From<VdevDecodeError> for PoolDecodeError {
+    fn from(value: VdevDecodeError) -> Self {
+        PoolDecodeError::VdevDecodeError { err: value }
     }
 }
 
@@ -689,6 +705,9 @@ impl fmt::Display for PoolDecodeError {
                     "Pool decode value type mismatch for '{name}' got {data_type}"
                 )
             }
+            PoolDecodeError::VdevDecodeError { err } => {
+                write!(f, "Pool Vdev decode error: {err}")
+            }
         }
     }
 }
@@ -698,6 +717,7 @@ impl error::Error for PoolDecodeError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
             PoolDecodeError::NvDecodeError { err } => Some(err),
+            PoolDecodeError::VdevDecodeError { err } => Some(err),
             _ => None,
         }
     }

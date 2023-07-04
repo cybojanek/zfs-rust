@@ -11,6 +11,7 @@ mod object_set;
 mod pool;
 mod sector;
 mod uber_block;
+mod vdev;
 mod zil_header;
 
 pub use block_pointer::{BlockPointer, BlockPointerDecodeError, BlockPointerEncodeError};
@@ -30,4 +31,5 @@ pub use pool::{
     Pool, PoolDecodeError, PoolFeaturesForRead, PoolHealth, PoolHost, PoolState, PoolVersion,
 };
 pub use uber_block::{UberBlock, UberBlockDecodeError, UberBlockEncodeError};
+pub use vdev::{VdevDecodeError, VdevTree};
 pub use zil_header::{ZilHeader, ZilHeaderDecodeError, ZilHeaderEncodeError};
