@@ -116,7 +116,7 @@ impl UberBlock {
         let timestamp = decoder.get_u64()?;
 
         // Decode block pointer.
-        let block_ptr = BlockPointer::from_decoder(&mut decoder)?;
+        let block_ptr = BlockPointer::from_decoder(&decoder)?;
 
         // Decode software version.
         let software_version = decoder.get_u64()?;

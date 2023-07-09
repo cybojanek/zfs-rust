@@ -53,7 +53,7 @@ impl ZilHeader {
      *
      * Returns [`DecodeError`] if there are not enough bytes, or magic is invalid.
      */
-    pub fn from_decoder(decoder: &mut Decoder) -> Result<ZilHeader, ZilHeaderDecodeError> {
+    pub fn from_decoder(decoder: &Decoder) -> Result<ZilHeader, ZilHeaderDecodeError> {
         let zil_header = ZilHeader {
             claim_txg: decoder.get_u64()?,
             replay_seq: decoder.get_u64()?,

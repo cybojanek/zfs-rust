@@ -186,7 +186,7 @@ impl Dnode {
      *
      * Returns [`DecodeError`] if there are not enough bytes, or magic is invalid.
      */
-    pub fn from_decoder(decoder: &mut Decoder) -> Result<Dnode, DnodeDecodeError> {
+    pub fn from_decoder(decoder: &Decoder) -> Result<Dnode, DnodeDecodeError> {
         // Decode DMU type.
         let dmu = DmuType::try_from(decoder.get_u8()?)?;
 

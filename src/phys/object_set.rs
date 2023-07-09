@@ -128,7 +128,7 @@ impl ObjectSet {
      *
      * Returns [`DecodeError`] if there are not enough bytes, or magic is invalid.
      */
-    pub fn from_decoder(decoder: &mut Decoder) -> Result<ObjectSet, ObjectSetDecodeError> {
+    pub fn from_decoder(decoder: &Decoder) -> Result<ObjectSet, ObjectSetDecodeError> {
         let os_meta = Dnode::from_decoder(decoder)?;
         let zil_header = ZilHeader::from_decoder(decoder)?;
 

@@ -34,7 +34,7 @@ impl ChecksumValue {
      *
      * Returns [`DecodeError`] if there are not enough bytes.
      */
-    pub fn from_decoder(decoder: &mut Decoder) -> Result<ChecksumValue, DecodeError> {
+    pub fn from_decoder(decoder: &Decoder) -> Result<ChecksumValue, DecodeError> {
         Ok(ChecksumValue {
             words: [
                 decoder.get_u64()?,

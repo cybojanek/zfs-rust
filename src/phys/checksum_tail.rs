@@ -36,11 +36,11 @@ impl ChecksumTail {
      * Returns [`DecodeError`] if there are not enough bytes, or magic is invalid.
      */
     pub fn from_bytes(bytes: &[u8; ChecksumTail::LENGTH]) -> Result<ChecksumTail, DecodeError> {
-        let mut decoder = Decoder::from_u64_magic(bytes, ChecksumTail::MAGIC)?;
+        let decoder = Decoder::from_u64_magic(bytes, ChecksumTail::MAGIC)?;
 
         Ok(ChecksumTail {
             endian: decoder.endian(),
-            value: ChecksumValue::from_decoder(&mut decoder)?,
+            value: ChecksumValue::from_decoder(&decoder)?,
         })
     }
 

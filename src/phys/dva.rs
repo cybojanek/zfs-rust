@@ -80,7 +80,7 @@ impl Dva {
      * Returns [`DvaDecodeError`] if there are not enough bytes,
      * or padding is non-zero.
      */
-    pub fn from_decoder(decoder: &mut Decoder) -> Result<Dva, DvaDecodeError> {
+    pub fn from_decoder(decoder: &Decoder) -> Result<Dva, DvaDecodeError> {
         // Decode values.
         let a = decoder.get_u64()?;
         let b = decoder.get_u64()?;

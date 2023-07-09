@@ -39,7 +39,7 @@ impl BlockPointer {
      * Returns [`BlockPointerDecodeError`] if there are not enough bytes,
      * or block pointer is malformed.
      */
-    pub fn from_decoder(decoder: &mut Decoder) -> Result<BlockPointer, BlockPointerDecodeError> {
+    pub fn from_decoder(decoder: &Decoder) -> Result<BlockPointer, BlockPointerDecodeError> {
         // Decode flags.
         decoder.skip(3 * Dva::LENGTH)?;
         let flags = decoder.get_u64()?;
@@ -161,7 +161,7 @@ impl BlockPointerEmbedded {
      * or padding is non-zero.
      */
     pub fn from_decoder(
-        decoder: &mut Decoder,
+        decoder: &Decoder,
     ) -> Result<BlockPointerEmbedded, BlockPointerDecodeError> {
         // Decode embedded payload.
         let mut payload = [0; BlockPointerEmbedded::MAX_PAYLOAD_LENGTH];
@@ -356,7 +356,7 @@ impl BlockPointerEncrypted {
      * or padding is non-zero.
      */
     pub fn from_decoder(
-        decoder: &mut Decoder,
+        decoder: &Decoder,
     ) -> Result<BlockPointerEncrypted, BlockPointerDecodeError> {
         let dvas = [Dva::from_decoder(decoder)?, Dva::from_decoder(decoder)?];
 
@@ -528,9 +528,7 @@ impl BlockPointerRegular {
      * Returns [`BlockPointerDecodeError`] if there are not enough bytes,
      * or padding is non-zero.
      */
-    pub fn from_decoder(
-        decoder: &mut Decoder,
-    ) -> Result<BlockPointerRegular, BlockPointerDecodeError> {
+    pub fn from_decoder(decoder: &Decoder) -> Result<BlockPointerRegular, BlockPointerDecodeError> {
         let dvas = [
             Dva::from_decoder(decoder)?,
             Dva::from_decoder(decoder)?,
