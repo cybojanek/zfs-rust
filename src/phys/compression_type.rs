@@ -1,5 +1,14 @@
+use core::convert::TryFrom;
+use core::fmt;
+use core::result::Result;
+
+#[cfg(feature = "std")]
+use std::error;
+
 extern crate num;
 extern crate strum;
+
+////////////////////////////////////////////////////////////////////////////////
 
 /** Compression type.
  *
@@ -26,9 +35,47 @@ pub enum CompressionType {
     Zstd,
 }
 
-impl CompressionType {
-    /** Converts a [`u8`] to a [`CompressionType`], returning `None` if unknown. */
-    pub fn from_u8(compression: u8) -> Option<CompressionType> {
+////////////////////////////////////////////////////////////////////////////////
+
+impl Into<u8> for CompressionType {
+    fn into(self) -> u8 {
+        self as u8
+    }
+}
+
+impl TryFrom<u8> for CompressionType {
+    type Error = CompressionTypeError;
+
+    fn try_from(compression: u8) -> Result<Self, Self::Error> {
         num::FromPrimitive::from_u8(compression)
+            .ok_or(CompressionTypeError::InvalidValue { value: compression })
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub enum CompressionTypeError {
+    /** Invalid compression type value.
+     *
+     * - `value` - Invalid value.
+     */
+    InvalidValue { value: u8 },
+}
+
+impl fmt::Display for CompressionTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CompressionTypeError::InvalidValue { value } => {
+                write!(f, "Compression Type error: invalid value: {value}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl error::Error for CompressionTypeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        None
     }
 }

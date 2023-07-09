@@ -1,3 +1,10 @@
+use core::convert::TryFrom;
+use core::fmt;
+use core::result::Result;
+
+#[cfg(feature = "std")]
+use std::error;
+
 extern crate num;
 extern crate strum;
 
@@ -65,9 +72,46 @@ pub enum DmuType {
     BpObjectSubObject,
 }
 
-impl DmuType {
-    /** Converts a [`u8`] to a [`DmuType`], returning `None` if unknown. */
-    pub fn from_u8(dmu: u8) -> Option<DmuType> {
-        num::FromPrimitive::from_u8(dmu)
+////////////////////////////////////////////////////////////////////////////////
+
+impl Into<u8> for DmuType {
+    fn into(self) -> u8 {
+        self as u8
+    }
+}
+
+impl TryFrom<u8> for DmuType {
+    type Error = DmuTypeError;
+
+    fn try_from(dmu: u8) -> Result<Self, Self::Error> {
+        num::FromPrimitive::from_u8(dmu).ok_or(DmuTypeError::InvalidValue { value: dmu })
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub enum DmuTypeError {
+    /** Invalid dmu type value.
+     *
+     * - `value` - Invalid value.
+     */
+    InvalidValue { value: u8 },
+}
+
+impl fmt::Display for DmuTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            DmuTypeError::InvalidValue { value } => {
+                write!(f, "Checksum Type error: invalid value: {value}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl error::Error for DmuTypeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        None
     }
 }

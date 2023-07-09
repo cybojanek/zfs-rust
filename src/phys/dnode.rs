@@ -6,7 +6,10 @@ use core::result::Result::{Err, Ok};
 use std::error;
 
 use crate::endian::{DecodeError, Decoder};
-use crate::phys::{BlockPointer, BlockPointerDecodeError, ChecksumType, CompressionType, DmuType};
+use crate::phys::{
+    BlockPointer, BlockPointerDecodeError, ChecksumType, ChecksumTypeError, CompressionType,
+    CompressionTypeError, DmuType, DmuTypeError,
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -185,11 +188,7 @@ impl Dnode {
      */
     pub fn from_decoder(decoder: &mut Decoder) -> Result<Dnode, DnodeDecodeError> {
         // Decode DMU type.
-        let dmu = decoder.get_u8()?;
-        let dmu = match DmuType::from_u8(dmu) {
-            Some(v) => v,
-            None => return Err(DnodeDecodeError::InvalidDmuType { dmu: dmu }),
-        };
+        let dmu = DmuType::try_from(decoder.get_u8()?)?;
 
         // Decode values.
         let indirect_block_shift = decoder.get_u8()?;
@@ -197,29 +196,13 @@ impl Dnode {
         let block_pointers_n = decoder.get_u8()?;
 
         // Decode bonus type.
-        let bonus_type = decoder.get_u8()?;
-        let bonus_type = match DmuType::from_u8(bonus_type) {
-            Some(v) => v,
-            None => return Err(DnodeDecodeError::InvalidDmuType { dmu: bonus_type }),
-        };
+        let bonus_type = DmuType::try_from(decoder.get_u8()?)?;
 
         // Decode checksum.
-        let checksum = decoder.get_u8()?;
-        let checksum = match ChecksumType::from_u8(checksum) {
-            Some(v) => v,
-            None => return Err(DnodeDecodeError::InvalidChecksumType { checksum: checksum }),
-        };
+        let checksum = ChecksumType::try_from(decoder.get_u8()?)?;
 
         // Decode compression.
-        let compression = decoder.get_u8()?;
-        let compression = match CompressionType::from_u8(compression) {
-            Some(v) => v,
-            None => {
-                return Err(DnodeDecodeError::InvalidCompressionType {
-                    compression: compression,
-                })
-            }
-        };
+        let compression = CompressionType::try_from(decoder.get_u8()?)?;
 
         // Decode flags.
         let flags = decoder.get_u8()?;
@@ -337,6 +320,24 @@ pub enum DnodeDecodeError {
      */
     BlockPointerDecodeError { err: BlockPointerDecodeError },
 
+    /** Invalid checksum type.
+     *
+     * - `err` - ['ChecksumTypeError'].
+     */
+    ChecksumTypeError { err: ChecksumTypeError },
+
+    /** Invalid compression type.
+     *
+     * - `err` - ['CompressionTypeError'].
+     */
+    CompressionTypeError { err: CompressionTypeError },
+
+    /** Invalid DMU type.
+     *
+     * - `err` - ['DmuTypeError'].
+     */
+    DmuTypeError { err: DmuTypeError },
+
     /** Endian decode error.
      *
      * - `err` - [`DecodeError`]
@@ -354,29 +355,29 @@ pub enum DnodeDecodeError {
      * - `length` - Bonus length.
      */
     InvalidBonusLength { length: u16 },
-
-    /** Invalid checksum type.
-     *
-     * - `checksum` - Value.
-     */
-    InvalidChecksumType { checksum: u8 },
-
-    /** Invalid compression type.
-     *
-     * - `compression` - Value.
-     */
-    InvalidCompressionType { compression: u8 },
-
-    /** Invalid DMU type.
-     *
-     * - `dmu` - Value.
-     */
-    InvalidDmuType { dmu: u8 },
 }
 
 impl From<BlockPointerDecodeError> for DnodeDecodeError {
     fn from(value: BlockPointerDecodeError) -> Self {
         DnodeDecodeError::BlockPointerDecodeError { err: value }
+    }
+}
+
+impl From<ChecksumTypeError> for DnodeDecodeError {
+    fn from(value: ChecksumTypeError) -> Self {
+        DnodeDecodeError::ChecksumTypeError { err: value }
+    }
+}
+
+impl From<CompressionTypeError> for DnodeDecodeError {
+    fn from(value: CompressionTypeError) -> Self {
+        DnodeDecodeError::CompressionTypeError { err: value }
+    }
+}
+
+impl From<DmuTypeError> for DnodeDecodeError {
+    fn from(value: DmuTypeError) -> Self {
+        DnodeDecodeError::DmuTypeError { err: value }
     }
 }
 
@@ -392,6 +393,15 @@ impl fmt::Display for DnodeDecodeError {
             DnodeDecodeError::BlockPointerDecodeError { err } => {
                 write!(f, "Dnode Block Pointer decode error: {err}")
             }
+            DnodeDecodeError::ChecksumTypeError { err } => {
+                write!(f, "Dnode checksum type decode error: {err}")
+            }
+            DnodeDecodeError::CompressionTypeError { err } => {
+                write!(f, "Dnode compression type decode error: {err}")
+            }
+            DnodeDecodeError::DmuTypeError { err } => {
+                write!(f, "Dnode DMU type decode error: {err}")
+            }
             DnodeDecodeError::EndianDecodeError { err } => {
                 write!(f, "Dnode Endian decode error: {err}")
             }
@@ -401,18 +411,6 @@ impl fmt::Display for DnodeDecodeError {
             DnodeDecodeError::InvalidBonusLength { length } => {
                 write!(f, "Dnode decode error: invalid bonus length {length}")
             }
-            DnodeDecodeError::InvalidChecksumType { checksum } => {
-                write!(f, "Dnode decode error: invalid checksum type {checksum}")
-            }
-            DnodeDecodeError::InvalidCompressionType { compression } => {
-                write!(
-                    f,
-                    "Dnode decode error: invalid compression type {compression}"
-                )
-            }
-            DnodeDecodeError::InvalidDmuType { dmu } => {
-                write!(f, "Dnode decode error: invalid dmu type {dmu}")
-            }
         }
     }
 }
@@ -421,6 +419,9 @@ impl fmt::Display for DnodeDecodeError {
 impl error::Error for DnodeDecodeError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
+            DnodeDecodeError::ChecksumTypeError { err } => Some(err),
+            DnodeDecodeError::CompressionTypeError { err } => Some(err),
+            DnodeDecodeError::DmuTypeError { err } => Some(err),
             DnodeDecodeError::EndianDecodeError { err } => Some(err),
             _ => None,
         }

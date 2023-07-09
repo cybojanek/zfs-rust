@@ -9,7 +9,10 @@ extern crate num;
 extern crate strum;
 
 use crate::endian::{DecodeError, Decoder, Endian};
-use crate::phys::{ChecksumType, ChecksumValue, CompressionType, DmuType, Dva, DvaDecodeError};
+use crate::phys::{
+    ChecksumType, ChecksumTypeError, ChecksumValue, CompressionType, CompressionTypeError, DmuType,
+    DmuTypeError, Dva, DvaDecodeError,
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -206,10 +209,7 @@ impl BlockPointerEmbedded {
 
         // Decode DMU type.
         let dmu = ((flags >> 48) & 0xff) as u8;
-        let dmu = match DmuType::from_u8(dmu) {
-            Some(v) => v,
-            None => return Err(BlockPointerDecodeError::InvalidDmuType { dmu: dmu }),
-        };
+        let dmu = DmuType::try_from(dmu)?;
 
         // Decode embedded type.
         let embedded_type = ((flags >> 40) & 0xff) as u8;
@@ -224,14 +224,7 @@ impl BlockPointerEmbedded {
 
         // Decode compression.
         let compression = ((flags >> 32) & 0xff) as u8;
-        let compression = match CompressionType::from_u8(compression) {
-            Some(v) => v,
-            None => {
-                return Err(BlockPointerDecodeError::InvalidCompressionType {
-                    compression: compression,
-                })
-            }
-        };
+        let compression = CompressionType::try_from(compression)?;
 
         // Decode sizes.
         let logical_size = (flags & 0x1ffffff) as u32;
@@ -399,32 +392,15 @@ impl BlockPointerEncrypted {
 
         // Decode DMU type.
         let dmu = ((flags >> 48) & 0xff) as u8;
-        let dmu = match DmuType::from_u8(dmu) {
-            Some(v) => v,
-            None => return Err(BlockPointerDecodeError::InvalidDmuType { dmu: dmu }),
-        };
+        let dmu = DmuType::try_from(dmu)?;
 
         // Decode checksum.
         let checksum_type = ((flags >> 40) & 0xff) as u8;
-        let checksum_type = match ChecksumType::from_u8(checksum_type) {
-            Some(v) => v,
-            None => {
-                return Err(BlockPointerDecodeError::InvalidChecksumType {
-                    checksum: checksum_type,
-                })
-            }
-        };
+        let checksum_type = ChecksumType::try_from(checksum_type)?;
 
         // Decode compression.
         let compression = ((flags >> 32) & 0xff) as u8;
-        let compression = match CompressionType::from_u8(compression) {
-            Some(v) => v,
-            None => {
-                return Err(BlockPointerDecodeError::InvalidCompressionType {
-                    compression: compression,
-                })
-            }
-        };
+        let compression = CompressionType::try_from(compression)?;
 
         // Decode sizes.
         let logical_size = (flags & 0xffff) as u16;
@@ -589,32 +565,15 @@ impl BlockPointerRegular {
 
         // Decode DMU type.
         let dmu = ((flags >> 48) & 0xff) as u8;
-        let dmu = match DmuType::from_u8(dmu) {
-            Some(v) => v,
-            None => return Err(BlockPointerDecodeError::InvalidDmuType { dmu: dmu }),
-        };
+        let dmu = DmuType::try_from(dmu)?;
 
         // Decode checksum.
         let checksum_type = ((flags >> 40) & 0xff) as u8;
-        let checksum_type = match ChecksumType::from_u8(checksum_type) {
-            Some(v) => v,
-            None => {
-                return Err(BlockPointerDecodeError::InvalidChecksumType {
-                    checksum: checksum_type,
-                })
-            }
-        };
+        let checksum_type = ChecksumType::try_from(checksum_type)?;
 
         // Decode compression.
         let compression = ((flags >> 32) & 0xff) as u8;
-        let compression = match CompressionType::from_u8(compression) {
-            Some(v) => v,
-            None => {
-                return Err(BlockPointerDecodeError::InvalidCompressionType {
-                    compression: compression,
-                })
-            }
-        };
+        let compression = CompressionType::try_from(compression)?;
 
         // Decode sizes.
         let logical_size = (flags & 0xffff) as u16;
@@ -650,6 +609,24 @@ impl BlockPointerRegular {
 
 #[derive(Debug)]
 pub enum BlockPointerDecodeError {
+    /** Invalid checksum type.
+     *
+     * - `err` - ['ChecksumTypeError'].
+     */
+    ChecksumTypeError { err: ChecksumTypeError },
+
+    /** Invalid compression type.
+     *
+     * - `err` - ['CompressionTypeError'].
+     */
+    CompressionTypeError { err: CompressionTypeError },
+
+    /** Invalid DMU type.
+     *
+     * - `err` - ['DmuTypeError'].
+     */
+    DmuTypeError { err: DmuTypeError },
+
     /** DVA decode error.
      *
      * - `err` - [`DvaDecodeError`]
@@ -669,29 +646,11 @@ pub enum BlockPointerDecodeError {
      */
     InvalidBlockPointerType { embedded: bool, encrypted: bool },
 
-    /** Invalid checksum type.
-     *
-     * - `checksum` - Value.
-     */
-    InvalidChecksumType { checksum: u8 },
-
-    /** Invalid compression type.
-     *
-     * - `compression` - Value.
-     */
-    InvalidCompressionType { compression: u8 },
-
     /** Invalid Dedup value.
      *
      * - `dedup` - Value.
      */
     InvalidDedupValue { dedup: bool },
-
-    /** Invalid DMU type.
-     *
-     * - `dmu` - Value.
-     */
-    InvalidDmuType { dmu: u8 },
 
     /** Invalid embedded length.
      *
@@ -704,6 +663,24 @@ pub enum BlockPointerDecodeError {
      * - `embedded_type` - Value.
      */
     InvalidEmbeddedType { embedded_type: u8 },
+}
+
+impl From<ChecksumTypeError> for BlockPointerDecodeError {
+    fn from(value: ChecksumTypeError) -> Self {
+        BlockPointerDecodeError::ChecksumTypeError { err: value }
+    }
+}
+
+impl From<CompressionTypeError> for BlockPointerDecodeError {
+    fn from(value: CompressionTypeError) -> Self {
+        BlockPointerDecodeError::CompressionTypeError { err: value }
+    }
+}
+
+impl From<DmuTypeError> for BlockPointerDecodeError {
+    fn from(value: DmuTypeError) -> Self {
+        BlockPointerDecodeError::DmuTypeError { err: value }
+    }
 }
 
 impl From<DvaDecodeError> for BlockPointerDecodeError {
@@ -721,6 +698,15 @@ impl From<DecodeError> for BlockPointerDecodeError {
 impl fmt::Display for BlockPointerDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            BlockPointerDecodeError::ChecksumTypeError { err } => {
+                write!(f, "BlockPointer checksum type decode error: {err}")
+            }
+            BlockPointerDecodeError::CompressionTypeError { err } => {
+                write!(f, "BlockPointer compression type decode error: {err}")
+            }
+            BlockPointerDecodeError::DmuTypeError { err } => {
+                write!(f, "BlockPointer DMU type decode error: {err}")
+            }
             BlockPointerDecodeError::DvaDecodeError { err } => {
                 write!(f, "Block Pointer DVA decode error: {err}")
             }
@@ -736,23 +722,8 @@ impl fmt::Display for BlockPointerDecodeError {
                     "Block Pointer decode error: embedded: {embedded} encrypted: {encrypted}"
                 )
             }
-            BlockPointerDecodeError::InvalidChecksumType { checksum } => {
-                write!(
-                    f,
-                    "BlockPointer decode error: invalid checksum type {checksum}"
-                )
-            }
-            BlockPointerDecodeError::InvalidCompressionType { compression } => {
-                write!(
-                    f,
-                    "BlockPointer decode error: invalid compression type {compression}"
-                )
-            }
             BlockPointerDecodeError::InvalidDedupValue { dedup } => {
                 write!(f, "BlockPointer decode error: invalid dedup value {dedup}")
-            }
-            BlockPointerDecodeError::InvalidDmuType { dmu } => {
-                write!(f, "BlockPointer decode error: invalid dmu type {dmu}")
             }
             BlockPointerDecodeError::InvalidEmbeddedLength { length } => {
                 write!(
@@ -774,6 +745,9 @@ impl fmt::Display for BlockPointerDecodeError {
 impl error::Error for BlockPointerDecodeError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
+            BlockPointerDecodeError::ChecksumTypeError { err } => Some(err),
+            BlockPointerDecodeError::CompressionTypeError { err } => Some(err),
+            BlockPointerDecodeError::DmuTypeError { err } => Some(err),
             BlockPointerDecodeError::EndianDecodeError { err } => Some(err),
             _ => None,
         }

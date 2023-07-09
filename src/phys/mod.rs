@@ -13,10 +13,10 @@ mod zil_header;
 
 pub use block_pointer::{BlockPointer, BlockPointerDecodeError};
 pub use checksum_tail::ChecksumTail;
-pub use checksum_type::ChecksumType;
+pub use checksum_type::{ChecksumType, ChecksumTypeError};
 pub use checksum_value::ChecksumValue;
-pub use compression_type::CompressionType;
-pub use dmu_type::DmuType;
+pub use compression_type::{CompressionType, CompressionTypeError};
+pub use dmu_type::{DmuType, DmuTypeError};
 pub use dnode::{Dnode, DnodeDecodeError};
 pub use dva::{Dva, DvaDecodeError};
 pub use label::{
