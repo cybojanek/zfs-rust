@@ -10,11 +10,6 @@ use crate::phys::{ChecksumTail, UberBlock, UberBlockDecodeError};
 
 ////////////////////////////////////////////////////////////////////////////////
 
-/// Base offset for DVA calculations.
-pub const DVA_BASE_OFFSET: u64 = (2 * Label::LENGTH + BootBlock::LENGTH) as u64;
-
-////////////////////////////////////////////////////////////////////////////////
-
 /**
  * Blank portion of label.
  *

@@ -5,11 +5,18 @@ use core::result::Result::{Err, Ok};
 #[cfg(feature = "std")]
 use std::error;
 
-use crate::checksum::{label_verify, LabelVerifyError};
-use crate::endian::{DecodeError, Decoder, Endian};
-use crate::phys::{BlockPointer, BlockPointerDecodeError};
+use crate::checksum::{label_checksum, label_verify, LabelChecksumError, LabelVerifyError};
+use crate::endian::{DecodeError, Decoder, EncodeError, Encoder, Endian};
+use crate::phys::{BlockPointer, BlockPointerDecodeError, BlockPointerEncodeError};
 
 ////////////////////////////////////////////////////////////////////////////////
+
+/// UberBlock MMP configuration.
+#[derive(Debug)]
+pub struct UberBlockMmp {
+    pub delay: u64,
+    pub config: u64,
+}
 
 /** Checksum tail.
  *
@@ -51,8 +58,7 @@ pub struct UberBlock {
     pub checkpoint_txg: u64,
     pub endian: Endian,
     pub guid_sum: u64,
-    pub mmp_config: u64,
-    pub mmp_delay: u64,
+    pub mmp: Option<UberBlockMmp>,
     pub ptr: BlockPointer,
     pub software_version: u64,
     pub timestamp: u64,
@@ -63,6 +69,9 @@ pub struct UberBlock {
 impl UberBlock {
     /// Byte length of an encoded [`UberBlock`].
     pub const LENGTH: usize = 1024;
+
+    /// Padding size.
+    const PADDING_SIZE: usize = 776;
 
     /// Magic value for an encoded [`UberBlock`].
     pub const MAGIC: u64 = 0x0000000000bab10c;
@@ -80,54 +89,37 @@ impl UberBlock {
         bytes: &[u8; UberBlock::LENGTH],
         offset: u64,
     ) -> Result<UberBlock, UberBlockDecodeError> {
+        ////////////////////////////////
         // Verify checksum.
-        match label_verify(bytes, offset) {
-            Ok(_) => (),
-            Err(_e @ LabelVerifyError::EmptyMagic {}) => {
-                return Err(UberBlockDecodeError::EmptyLabelMagic {});
-            }
-            Err(e) => return Err(UberBlockDecodeError::LabelVerifyError { err: e }),
-        };
+        label_verify(bytes, offset)?;
 
-        // Create decoder, and catch InvalidMagic error.
-        // If the magic is 0, then return a more graceful error of empty magic.
-        let mut decoder = match Decoder::from_u64_magic(bytes, UberBlock::MAGIC) {
-            Ok(v) => v,
-            Err(e) => match e {
-                DecodeError::InvalidMagic {
-                    expected: _,
-                    actual,
-                } => {
-                    // The byte order does not matter for 0, so just use
-                    // native encoding (ne).
-                    if u64::from_ne_bytes(actual) == 0 {
-                        return Err(UberBlockDecodeError::EmptyMagic {});
-                    }
-                    return Err(UberBlockDecodeError::EndianDecodeError { err: e });
-                }
-                _ => return Err(UberBlockDecodeError::EndianDecodeError { err: e }),
-            },
-        };
+        ////////////////////////////////
+        // Create decoder.
+        let decoder = Decoder::from_u64_magic(bytes, UberBlock::MAGIC)?;
 
+        ////////////////////////////////
         // Decode fields.
         let version = decoder.get_u64()?;
         let txg = decoder.get_u64()?;
         let guid_sum = decoder.get_u64()?;
         let timestamp = decoder.get_u64()?;
 
+        ////////////////////////////////
         // Decode block pointer.
         let block_ptr = BlockPointer::from_decoder(&decoder)?;
 
+        ////////////////////////////////
         // Decode software version.
         let software_version = decoder.get_u64()?;
 
+        ////////////////////////////////
         // Decode MMP.
         let mmp_magic = decoder.get_u64()?;
         let mmp_delay = decoder.get_u64()?;
         let mmp_config = decoder.get_u64()?;
 
         // Check MMP magic.
-        match mmp_magic {
+        let mmp = match mmp_magic {
             0 => {
                 if mmp_delay != 0 || mmp_config != 0 {
                     return Err(UberBlockDecodeError::NonZeroMmpValues {
@@ -135,30 +127,99 @@ impl UberBlock {
                         config: mmp_config,
                     });
                 }
+                None
             }
-            UberBlock::MMP_MAGIC => (),
+            UberBlock::MMP_MAGIC => Some(UberBlockMmp {
+                config: mmp_config,
+                delay: mmp_delay,
+            }),
             _ => return Err(UberBlockDecodeError::InvalidMmpMagic { magic: mmp_magic }),
-        }
+        };
 
-        // Checkpoint transaction group.
+        ////////////////////////////////
+        // Decode checkpoint transaction group.
         let checkpoint_txg = decoder.get_u64()?;
 
-        // Check that the rest of the uber block (up to the checksum at the tail)
-        // is all zeroes.
-        decoder.skip_zero_padding(776)?;
+        ////////////////////////////////
+        // Check that the rest of the uber block (up to the checksum at the
+        // tail) is all zeroes.
+        decoder.skip_zero_padding(UberBlock::PADDING_SIZE)?;
 
+        ////////////////////////////////
+        // Success.
         Ok(UberBlock {
             checkpoint_txg: checkpoint_txg,
             endian: decoder.endian(),
             guid_sum: guid_sum,
-            mmp_config: mmp_config,
-            mmp_delay: mmp_delay,
+            mmp: mmp,
             ptr: block_ptr,
             software_version: software_version,
             timestamp: timestamp,
             txg: txg,
             version: version,
         })
+    }
+
+    /** Encodes an [`UberBlock`].
+     *
+     * # Errors
+     *
+     * Returns [`UberBlockEncodeError`] if there is not enough space or
+     * uberblock is invalid.
+     */
+    pub fn to_bytes(
+        &self,
+        bytes: &mut [u8; UberBlock::LENGTH],
+        offset: u64,
+    ) -> Result<(), UberBlockEncodeError> {
+        ////////////////////////////////
+        // Create encoder.
+        let mut encoder = Encoder::to_bytes(bytes, self.endian);
+        encoder.put_u64(UberBlock::MAGIC)?;
+
+        ////////////////////////////////
+        // Encode fields.
+        encoder.put_u64(self.version)?;
+        encoder.put_u64(self.txg)?;
+        encoder.put_u64(self.guid_sum)?;
+        encoder.put_u64(self.timestamp)?;
+
+        ////////////////////////////////
+        // Encode block pointer.
+        self.ptr.to_encoder(&mut encoder)?;
+
+        ////////////////////////////////
+        // Encode software version.
+        encoder.put_u64(self.software_version)?;
+
+        ////////////////////////////////
+        // Encode MMP (conditionaly).
+        match &self.mmp {
+            Some(mmp) => {
+                encoder.put_u64(UberBlock::MMP_MAGIC)?;
+                encoder.put_u64(mmp.delay)?;
+                encoder.put_u64(mmp.config)?;
+            }
+            None => {
+                encoder.put_zero_padding(24)?;
+            }
+        }
+
+        ////////////////////////////////
+        // Encode checkpoint transaction group.
+        encoder.put_u64(self.checkpoint_txg)?;
+
+        ////////////////////////////////
+        // Encode padding.
+        encoder.put_zero_padding(UberBlock::PADDING_SIZE)?;
+
+        ////////////////////////////////
+        // Compute checksum.
+        label_checksum(bytes, offset, self.endian)?;
+
+        ////////////////////////////////
+        // Success.
+        Ok(())
     }
 }
 
@@ -171,12 +232,6 @@ pub enum UberBlockDecodeError {
      * - `err` - [`BlockPointerDecodeError`]
      */
     BlockPointerDecodeError { err: BlockPointerDecodeError },
-
-    /** Empty label magic. */
-    EmptyLabelMagic {},
-
-    /** Empty magic. */
-    EmptyMagic {},
 
     /** Endian decode error.
      *
@@ -216,17 +271,17 @@ impl From<DecodeError> for UberBlockDecodeError {
     }
 }
 
+impl From<LabelVerifyError> for UberBlockDecodeError {
+    fn from(value: LabelVerifyError) -> Self {
+        UberBlockDecodeError::LabelVerifyError { err: value }
+    }
+}
+
 impl fmt::Display for UberBlockDecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             UberBlockDecodeError::BlockPointerDecodeError { err } => {
                 write!(f, "Uber Block Block Pointer decode error: {err}")
-            }
-            UberBlockDecodeError::EmptyLabelMagic {} => {
-                write!(f, "Uber Block empty label magic error")
-            }
-            UberBlockDecodeError::EmptyMagic {} => {
-                write!(f, "Uber Block empty magic error")
             }
             UberBlockDecodeError::EndianDecodeError { err } => {
                 write!(f, "Uber Block Endian decode error: {err}")
@@ -255,9 +310,77 @@ impl error::Error for UberBlockDecodeError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
             UberBlockDecodeError::BlockPointerDecodeError { err } => Some(err),
-            UberBlockDecodeError::LabelVerifyError { err } => Some(err),
             UberBlockDecodeError::EndianDecodeError { err } => Some(err),
+            UberBlockDecodeError::LabelVerifyError { err } => Some(err),
             _ => None,
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub enum UberBlockEncodeError {
+    /** [`BlockPointer`] encode error.
+     *
+     * - `err` - [`BlockPointerEncodeError`]
+     */
+    BlockPointerEncodeError { err: BlockPointerEncodeError },
+
+    /** Endian encode error.
+     *
+     * - `err` - [`DecodeError`]
+     */
+    EndianEncodeError { err: EncodeError },
+
+    /** [`LabelChecksumError`] checksum error.
+     *
+     * - `err` - [`LabelChecksumError`]
+     */
+    LabelChecksumError { err: LabelChecksumError },
+}
+
+impl From<BlockPointerEncodeError> for UberBlockEncodeError {
+    fn from(value: BlockPointerEncodeError) -> Self {
+        UberBlockEncodeError::BlockPointerEncodeError { err: value }
+    }
+}
+
+impl From<EncodeError> for UberBlockEncodeError {
+    fn from(value: EncodeError) -> Self {
+        UberBlockEncodeError::EndianEncodeError { err: value }
+    }
+}
+
+impl From<LabelChecksumError> for UberBlockEncodeError {
+    fn from(value: LabelChecksumError) -> Self {
+        UberBlockEncodeError::LabelChecksumError { err: value }
+    }
+}
+
+impl fmt::Display for UberBlockEncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UberBlockEncodeError::BlockPointerEncodeError { err } => {
+                write!(f, "Uber Block Block Pointer encode error: {err}")
+            }
+            UberBlockEncodeError::EndianEncodeError { err } => {
+                write!(f, "Uber Block Endian encode error: {err}")
+            }
+            UberBlockEncodeError::LabelChecksumError { err } => {
+                write!(f, "Uber Block encode checksum error: {err}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl error::Error for UberBlockEncodeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            UberBlockEncodeError::BlockPointerEncodeError { err } => Some(err),
+            UberBlockEncodeError::EndianEncodeError { err } => Some(err),
+            UberBlockEncodeError::LabelChecksumError { err } => Some(err),
         }
     }
 }

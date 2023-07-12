@@ -39,6 +39,9 @@ pub enum CompressionType {
 
 impl Into<u8> for CompressionType {
     fn into(self) -> u8 {
+        // Check that type is not truncated, and limited to 7 bits, due to its
+        // representation in a BlockPointer.
+        debug_assert!((self as u64) < (i8::MAX as u64), "CompressionType: {self}");
         self as u8
     }
 }

@@ -76,6 +76,8 @@ pub enum DmuType {
 
 impl Into<u8> for DmuType {
     fn into(self) -> u8 {
+        // Check that type is not truncated.
+        debug_assert!((self as u64) < (u8::MAX as u64), "DmuType: {self}");
         self as u8
     }
 }

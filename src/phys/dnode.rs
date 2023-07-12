@@ -5,11 +5,31 @@ use core::result::Result::{Err, Ok};
 #[cfg(feature = "std")]
 use std::error;
 
-use crate::endian::{DecodeError, Decoder};
+use crate::endian::{DecodeError, Decoder, EncodeError, Encoder};
 use crate::phys::{
-    BlockPointer, BlockPointerDecodeError, ChecksumType, ChecksumTypeError, CompressionType,
-    CompressionTypeError, DmuType, DmuTypeError,
+    BlockPointer, BlockPointerDecodeError, BlockPointerEncodeError, ChecksumType,
+    ChecksumTypeError, CompressionType, CompressionTypeError, DmuType, DmuTypeError,
 };
+
+////////////////////////////////////////////////////////////////////////////////
+
+/// Is used field of [`Dnode`] in bytes (else in sectors).
+const DNODE_FLAG_USED_BYTES: u8 = 1;
+
+/// TODO: What does this mean?
+const DNODE_FLAG_USER_USED_ACCOUNTED: u8 = 2;
+
+/// Is a spill block pointer present in [`Dnode`].
+const DNODE_FLAG_SPILL_BLOCK_POINTER: u8 = 4;
+
+/// TODO: What does this mean?
+const DNODE_FLAG_USER_OBJ_USED_ACCOUNTED: u8 = 8;
+
+/// All known values of flags field of [`Dnode`].
+const DNODE_FLAG_ALL: u8 = DNODE_FLAG_USED_BYTES
+    | DNODE_FLAG_USER_USED_ACCOUNTED
+    | DNODE_FLAG_SPILL_BLOCK_POINTER
+    | DNODE_FLAG_USER_OBJ_USED_ACCOUNTED;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -69,15 +89,20 @@ pub struct Dnode {
     pub max_block_id: u64,
     pub tail: DnodeTail,
     pub used: u64,
+
+    pub used_is_bytes: bool,
+    pub user_obj_used_accounted: bool,
+    pub user_used_accounted: bool,
 }
 
+/// Tail of a [`Dnode`].
 #[derive(Debug)]
 pub enum DnodeTail {
-    Zero { data: DnodeTailZero },
-    One { data: DnodeTailOne },
-    Two { data: DnodeTailTwo },
-    Three { data: DnodeTailThree },
-    Spill { data: DnodeTailSpill },
+    Zero(DnodeTailZero),
+    One(DnodeTailOne),
+    Two(DnodeTailTwo),
+    Three(DnodeTailThree),
+    Spill(DnodeTailSpill),
 }
 
 /** [`DnodeTail`] with zero block pointers (all bonus).
@@ -187,46 +212,121 @@ impl Dnode {
      * Returns [`DecodeError`] if there are not enough bytes, or magic is invalid.
      */
     pub fn from_decoder(decoder: &Decoder) -> Result<Dnode, DnodeDecodeError> {
+        ////////////////////////////////
         // Decode DMU type.
         let dmu = DmuType::try_from(decoder.get_u8()?)?;
 
-        // Decode values.
+        ////////////////////////////////
+        // Decode indirect block shift.
         let indirect_block_shift = decoder.get_u8()?;
+
+        ////////////////////////////////
+        // Decode levels.
         let levels = decoder.get_u8()?;
+
+        ////////////////////////////////
+        // Decode number of block pointers.
         let block_pointers_n = decoder.get_u8()?;
 
+        ////////////////////////////////
         // Decode bonus type.
         let bonus_type = DmuType::try_from(decoder.get_u8()?)?;
 
+        ////////////////////////////////
         // Decode checksum.
         let checksum = ChecksumType::try_from(decoder.get_u8()?)?;
 
+        ////////////////////////////////
         // Decode compression.
         let compression = CompressionType::try_from(decoder.get_u8()?)?;
 
+        ////////////////////////////////
         // Decode flags.
         let flags = decoder.get_u8()?;
+        if (flags & DNODE_FLAG_ALL) != flags {
+            return Err(DnodeDecodeError::InvalidFlags { flags: flags });
+        }
 
-        // Decode values.
+        // Check for spill, which only makes sense if block pointers is 1.
+        // TODO(cybojanek): Confirm this?
+        let is_spill = (flags & DNODE_FLAG_SPILL_BLOCK_POINTER) != 0;
+        if is_spill && block_pointers_n != 1 {
+            return Err(DnodeDecodeError::InvalidSpillBlockPointerCount {
+                count: block_pointers_n,
+            });
+        }
+
+        ////////////////////////////////
+        // Decode block size sectors.
         let data_block_size_sectors = decoder.get_u16()?;
+
+        ////////////////////////////////
+        // Decode bonus length.
         let bonus_len = decoder.get_u16()?;
+
+        ////////////////////////////////
+        // Decode extra slots.
         let extra_slots = decoder.get_u8()?;
 
+        ////////////////////////////////
         // Decode padding.
         decoder.skip_zero_padding(3)?;
 
-        // Decode values.
+        ////////////////////////////////
+        // Decode max block id.
         let max_block_id = decoder.get_u64()?;
+
+        ////////////////////////////////
+        // Decode used.
         let used = decoder.get_u64()?;
 
+        ////////////////////////////////
         // Decode padding.
         decoder.skip_zero_padding(32)?;
 
+        ////////////////////////////////
         // Decode tail.
         let max_bonus_len: usize;
         let tail = match block_pointers_n {
+            0 => {
+                let tail = DnodeTailZero {
+                    ptrs: [],
+                    bonus: decoder.get_bytes(448)?.try_into().unwrap(),
+                };
+                max_bonus_len = tail.bonus.len();
+                DnodeTail::Zero(tail)
+            }
+            1 => {
+                if is_spill {
+                    let tail = DnodeTailSpill {
+                        ptrs: [BlockPointer::from_decoder(decoder)?],
+                        bonus: decoder.get_bytes(192)?.try_into().unwrap(),
+                        spill: BlockPointer::from_decoder(decoder)?,
+                    };
+                    max_bonus_len = tail.bonus.len();
+                    DnodeTail::Spill(tail)
+                } else {
+                    let tail = DnodeTailOne {
+                        ptrs: [BlockPointer::from_decoder(decoder)?],
+                        bonus: decoder.get_bytes(320)?.try_into().unwrap(),
+                    };
+                    max_bonus_len = tail.bonus.len();
+                    DnodeTail::One(tail)
+                }
+            }
+            2 => {
+                let tail = DnodeTailTwo {
+                    ptrs: [
+                        BlockPointer::from_decoder(decoder)?,
+                        BlockPointer::from_decoder(decoder)?,
+                    ],
+                    bonus: decoder.get_bytes(192)?.try_into().unwrap(),
+                };
+                max_bonus_len = tail.bonus.len();
+                DnodeTail::Two(tail)
+            }
             3 => {
-                let data = DnodeTailThree {
+                let tail = DnodeTailThree {
                     ptrs: [
                         BlockPointer::from_decoder(decoder)?,
                         BlockPointer::from_decoder(decoder)?,
@@ -234,17 +334,21 @@ impl Dnode {
                     ],
                     bonus: decoder.get_bytes(64)?.try_into().unwrap(),
                 };
-                max_bonus_len = data.bonus.len();
-                DnodeTail::Three { data: data }
+                max_bonus_len = tail.bonus.len();
+                DnodeTail::Three(tail)
             }
             n => return Err(DnodeDecodeError::InvalidBlockPointerCount { count: n }),
         };
 
         // Check bonus length.
-        if bonus_len as usize > max_bonus_len {
+        // NOTE(cybojanek): Safe to cast max_bonus_len as u16, because bonus
+        //                  is at most 448 bytes, and bonus_len is a u16.
+        if bonus_len > max_bonus_len as u16 {
             return Err(DnodeDecodeError::InvalidBonusLength { length: bonus_len });
         }
 
+        ////////////////////////////////
+        // Success.
         Ok(Dnode {
             bonus_len: bonus_len,
             bonus_type: bonus_type,
@@ -259,7 +363,119 @@ impl Dnode {
             max_block_id: max_block_id,
             tail: tail,
             used: used,
+
+            used_is_bytes: (flags & DNODE_FLAG_USED_BYTES) != 0,
+            user_obj_used_accounted: (flags & DNODE_FLAG_USER_OBJ_USED_ACCOUNTED) != 0,
+            user_used_accounted: (flags & DNODE_FLAG_USER_USED_ACCOUNTED) != 0,
         })
+    }
+
+    /** Encodes a [`Dnode`].
+     *
+     * # Errors
+     *
+     * Returns [`DnodeEncodeError`] if there is not enough space, or input is invalid.
+     */
+    pub fn to_encoder(&self, encoder: &mut Encoder) -> Result<(), DnodeEncodeError> {
+        ////////////////////////////////
+        // Encode DMU type.
+        encoder.put_u8(self.dmu.into())?;
+
+        ////////////////////////////////
+        // Encode indirect block shift.
+        encoder.put_u8(self.indirect_block_shift)?;
+
+        ////////////////////////////////
+        // Encode levels.
+        encoder.put_u8(self.levels)?;
+
+        ////////////////////////////////
+        // Encode number of block pointers.
+        // NOTE(cybojanek): Safe to cast as u8, because length is limited.
+        encoder.put_u8(self.pointers().len() as u8)?;
+
+        ////////////////////////////////
+        // Encode bonus type.
+        encoder.put_u8(self.bonus_type.into())?;
+
+        ////////////////////////////////
+        // Encode checksum.
+        encoder.put_u8(self.checksum.into())?;
+
+        ////////////////////////////////
+        // Encode compression.
+        encoder.put_u8(self.compression.into())?;
+
+        ////////////////////////////////
+        // Encode flags.
+        let flags = (if self.used_is_bytes {
+            DNODE_FLAG_USED_BYTES
+        } else {
+            0
+        } | if self.user_used_accounted {
+            DNODE_FLAG_USER_USED_ACCOUNTED
+        } else {
+            0
+        } | if self.user_obj_used_accounted {
+            DNODE_FLAG_USER_OBJ_USED_ACCOUNTED
+        } else {
+            0
+        } | match &self.tail {
+            DnodeTail::Spill(_) => DNODE_FLAG_SPILL_BLOCK_POINTER,
+            _ => 0,
+        });
+
+        encoder.put_u8(flags)?;
+
+        ////////////////////////////////
+        // Encode block size sectors.
+        encoder.put_u16(self.data_block_size_sectors)?;
+
+        ////////////////////////////////
+        // Encode bonus length.
+        // NOTE: Safe to cast, because bonus_capacity is at most 448 bytes.
+        if self.bonus_len > self.bonus_capacity().len() as u16 {
+            return Err(DnodeEncodeError::InvalidBonusLength {
+                length: self.bonus_len,
+            });
+        }
+        encoder.put_u16(self.bonus_len)?;
+
+        ////////////////////////////////
+        // Encode extra slots.
+        encoder.put_u8(self.extra_slots)?;
+
+        ////////////////////////////////
+        // Encode padding.
+        encoder.put_zero_padding(3)?;
+
+        ////////////////////////////////
+        // Encode max block id.
+        encoder.put_u64(self.max_block_id)?;
+
+        ////////////////////////////////
+        // Encode used.
+        encoder.put_u64(self.used)?;
+
+        ////////////////////////////////
+        // Encode padding.
+        encoder.put_zero_padding(32)?;
+
+        ////////////////////////////////
+        // Encode tail.
+        for ptr in self.pointers() {
+            ptr.to_encoder(encoder)?;
+        }
+        encoder.put_bytes(self.bonus_capacity())?;
+
+        match &self.tail {
+            DnodeTail::Spill(tail) => tail.spill.to_encoder(encoder)?,
+            _ => (),
+        }
+
+        ////////////////////////////////
+        // Success.
+        Ok(())
     }
 
     /** An empty [`Dnode`]. */
@@ -277,35 +493,48 @@ impl Dnode {
             indirect_block_shift: 0,
             levels: 0,
             max_block_id: 0,
-            tail: DnodeTail::Zero {
-                data: DnodeTailZero {
-                    ptrs: [],
-                    bonus: [0; 448],
-                },
-            },
+            tail: DnodeTail::Zero(DnodeTailZero {
+                ptrs: [],
+                bonus: [0; 448],
+            }),
             used: 0,
+
+            used_is_bytes: false,
+            user_obj_used_accounted: false,
+            user_used_accounted: false,
         }
     }
 
-    /** Get bonus slice. */
-    pub fn bonus(&self) -> &[u8] {
+    /** Gets capacity bonus slice. */
+    pub fn bonus_capacity(&self) -> &[u8] {
         match &self.tail {
-            DnodeTail::Zero { data } => &data.bonus[0..(self.bonus_len as usize)],
-            DnodeTail::One { data } => &data.bonus[0..(self.bonus_len as usize)],
-            DnodeTail::Two { data } => &data.bonus[0..(self.bonus_len as usize)],
-            DnodeTail::Three { data } => &data.bonus[0..(self.bonus_len as usize)],
-            DnodeTail::Spill { data } => &data.bonus[0..(self.bonus_len as usize)],
+            DnodeTail::Zero(tail) => &tail.bonus,
+            DnodeTail::One(tail) => &tail.bonus,
+            DnodeTail::Two(tail) => &tail.bonus,
+            DnodeTail::Three(tail) => &tail.bonus,
+            DnodeTail::Spill(tail) => &tail.bonus,
         }
     }
 
-    /** Get pointers. */
+    /** Gets used bonus slice. */
+    pub fn bonus_used(&self) -> &[u8] {
+        match &self.tail {
+            DnodeTail::Zero(tail) => &tail.bonus[0..(self.bonus_len as usize)],
+            DnodeTail::One(tail) => &tail.bonus[0..(self.bonus_len as usize)],
+            DnodeTail::Two(tail) => &tail.bonus[0..(self.bonus_len as usize)],
+            DnodeTail::Three(tail) => &tail.bonus[0..(self.bonus_len as usize)],
+            DnodeTail::Spill(tail) => &tail.bonus[0..(self.bonus_len as usize)],
+        }
+    }
+
+    /** Gets pointers. */
     pub fn pointers(&self) -> &[BlockPointer] {
         match &self.tail {
-            DnodeTail::Zero { data } => &data.ptrs,
-            DnodeTail::One { data } => &data.ptrs,
-            DnodeTail::Two { data } => &data.ptrs,
-            DnodeTail::Three { data } => &data.ptrs,
-            DnodeTail::Spill { data } => &data.ptrs,
+            DnodeTail::Zero(tail) => &tail.ptrs,
+            DnodeTail::One(tail) => &tail.ptrs,
+            DnodeTail::Two(tail) => &tail.ptrs,
+            DnodeTail::Three(tail) => &tail.ptrs,
+            DnodeTail::Spill(tail) => &tail.ptrs,
         }
     }
 }
@@ -350,11 +579,23 @@ pub enum DnodeDecodeError {
      */
     InvalidBlockPointerCount { count: u8 },
 
-    /** Invlaid bonus length.
+    /** Invalid bonus length.
      *
      * - `length` - Bonus length.
      */
     InvalidBonusLength { length: u16 },
+
+    /** Invlaid flags.
+     *
+     * - `flags` - Flags.
+     */
+    InvalidFlags { flags: u8 },
+
+    /** Invlaid spill block pointer count.
+     *
+     * - `flags` - Flags.
+     */
+    InvalidSpillBlockPointerCount { count: u8 },
 }
 
 impl From<BlockPointerDecodeError> for DnodeDecodeError {
@@ -411,6 +652,15 @@ impl fmt::Display for DnodeDecodeError {
             DnodeDecodeError::InvalidBonusLength { length } => {
                 write!(f, "Dnode decode error: invalid bonus length {length}")
             }
+            DnodeDecodeError::InvalidFlags { flags } => {
+                write!(f, "Dnode decode error: invalid flags {flags}")
+            }
+            DnodeDecodeError::InvalidSpillBlockPointerCount { count } => {
+                write!(
+                    f,
+                    "Dnode decode error: invalid spill block pointer count {count}"
+                )
+            }
         }
     }
 }
@@ -419,10 +669,73 @@ impl fmt::Display for DnodeDecodeError {
 impl error::Error for DnodeDecodeError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
+            DnodeDecodeError::BlockPointerDecodeError { err } => Some(err),
             DnodeDecodeError::ChecksumTypeError { err } => Some(err),
             DnodeDecodeError::CompressionTypeError { err } => Some(err),
             DnodeDecodeError::DmuTypeError { err } => Some(err),
             DnodeDecodeError::EndianDecodeError { err } => Some(err),
+            _ => None,
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub enum DnodeEncodeError {
+    /** [`BlockPointer`] encode error.
+     *
+     * - `err` - [`BlockPointerEncodeError`]
+     */
+    BlockPointerEncodeError { err: BlockPointerEncodeError },
+
+    /** Endian encode error.
+     *
+     * - `err` - [`EncodeError`]
+     */
+    EndianEncodeError { err: EncodeError },
+
+    /** Invalid bonus length.
+     *
+     * - `length` - Bonus length.
+     */
+    InvalidBonusLength { length: u16 },
+}
+
+impl From<BlockPointerEncodeError> for DnodeEncodeError {
+    fn from(value: BlockPointerEncodeError) -> Self {
+        DnodeEncodeError::BlockPointerEncodeError { err: value }
+    }
+}
+
+impl From<EncodeError> for DnodeEncodeError {
+    fn from(value: EncodeError) -> Self {
+        DnodeEncodeError::EndianEncodeError { err: value }
+    }
+}
+
+impl fmt::Display for DnodeEncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DnodeEncodeError::BlockPointerEncodeError { err } => {
+                write!(f, "Dnode Block Pointer encode error: {err}")
+            }
+            DnodeEncodeError::EndianEncodeError { err } => {
+                write!(f, "Dnode Endian encode error: {err}")
+            }
+            DnodeEncodeError::InvalidBonusLength { length } => {
+                write!(f, "Dnode encode error: invalid bonus length {length}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl error::Error for DnodeEncodeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            DnodeEncodeError::BlockPointerEncodeError { err } => Some(err),
+            DnodeEncodeError::EndianEncodeError { err } => Some(err),
             _ => None,
         }
     }

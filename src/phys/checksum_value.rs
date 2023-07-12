@@ -49,7 +49,7 @@ impl ChecksumValue {
      *
      * # Errors
      *
-     * Returns [`EncodeError`] if there are not enough bytes.
+     * Returns [`EncodeError`] if there is not enough space.
      */
     pub fn to_encoder(&self, encoder: &mut Encoder) -> Result<(), EncodeError> {
         encoder.put_u64(self.words[0])?;

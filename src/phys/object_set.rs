@@ -5,8 +5,11 @@ use core::result::Result::{Err, Ok};
 #[cfg(feature = "std")]
 use std::error;
 
-use crate::endian::{DecodeError, Decoder};
-use crate::phys::{Dnode, DnodeDecodeError, ZilHeader, ZilHeaderDecodeError};
+use crate::endian::{DecodeError, Decoder, EncodeError, Encoder};
+use crate::phys::{
+    Dnode, DnodeDecodeError, DnodeEncodeError, ZilHeader, ZilHeaderDecodeError,
+    ZilHeaderEncodeError,
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -129,9 +132,15 @@ impl ObjectSet {
      * Returns [`DecodeError`] if there are not enough bytes, or magic is invalid.
      */
     pub fn from_decoder(decoder: &Decoder) -> Result<ObjectSet, ObjectSetDecodeError> {
+        ////////////////////////////////
+        // Decode object set dnode.
         let os_meta = Dnode::from_decoder(decoder)?;
+
+        ////////////////////////////////
+        // Decode ZIL header.
         let zil_header = ZilHeader::from_decoder(decoder)?;
 
+        ////////////////////////////////
         // Decode object set type.
         let os_type = decoder.get_u64()?;
         let os_type = match num::FromPrimitive::from_u64(os_type) {
@@ -139,23 +148,29 @@ impl ObjectSet {
             None => return Err(ObjectSetDecodeError::InvalidObjectSetType { os_type: os_type }),
         };
 
+        ////////////////////////////////
         // Decode flags.
         let flags = decoder.get_u64()?;
         if (flags & FLAG_ALL) != flags {
             return Err(ObjectSetDecodeError::InvalidFlags { flags: flags });
         }
 
+        ////////////////////////////////
         // Decode MACs.
         let portable_mac = decoder.get_bytes(ObjectSet::MAC_LEN)?.try_into().unwrap();
         let local_mac = decoder.get_bytes(ObjectSet::MAC_LEN)?.try_into().unwrap();
 
-        // Padding up to LENGTH_V1.
+        ////////////////////////////////
+        // Decode padding up to LENGTH_V1.
         decoder.skip_zero_padding(240)?;
 
+        ////////////////////////////////
         // Check for extensions based on length.
         let mut extension = ObjectSetExtension::None {};
 
         if decoder.len() > 0 {
+            ////////////////////////////
+            // Decode user used and group used.
             let user_used = Dnode::from_decoder(decoder)?;
             let group_used = Dnode::from_decoder(decoder)?;
 
@@ -166,6 +181,8 @@ impl ObjectSet {
                 };
                 // No padding for LENGTH_V2.
             } else {
+                ////////////////////////
+                // Decode project used.
                 let project_used = Dnode::from_decoder(decoder)?;
 
                 extension = ObjectSetExtension::Three {
@@ -174,11 +191,13 @@ impl ObjectSet {
                     project_used: project_used,
                 };
 
-                // Padding up to LENGTH_V3.
+                // Decode padding up to LENGTH_V3.
                 decoder.skip_zero_padding(1536)?;
             }
         }
 
+        ////////////////////////////////
+        // Success.
         Ok(ObjectSet {
             os_meta: os_meta,
             zil_header: zil_header,
@@ -193,6 +212,81 @@ impl ObjectSet {
 
             extension: extension,
         })
+    }
+
+    /** Encodes an [`ObjectSet`].
+     *
+     * # Errors
+     *
+     * Returns [`ObjectSetEncodeError`] if there is not enough space, or input is invalid.
+     */
+    pub fn to_encoder(&self, encoder: &mut Encoder) -> Result<(), ObjectSetEncodeError> {
+        ////////////////////////////////
+        // Encode object set dnode.
+        self.os_meta.to_encoder(encoder)?;
+
+        ////////////////////////////////
+        // Encode ZIL header.
+        self.zil_header.to_encoder(encoder)?;
+
+        ////////////////////////////////
+        // Encode object set type.
+        encoder.put_u64(self.os_type as u64)?;
+
+        ////////////////////////////////
+        // Encode flags.
+        let flags = if self.user_accounting_complete {
+            FLAG_USER_ACCOUNTING_COMPLETE
+        } else {
+            0
+        } | if self.user_object_accounting_complete {
+            FLAG_USER_OBJECT_ACCOUNTING_COMPLETE
+        } else {
+            0
+        } | if self.project_quota_complete {
+            FLAG_PROJECT_QUOTA_COMPLETE
+        } else {
+            0
+        };
+        encoder.put_u64(flags)?;
+
+        ////////////////////////////////
+        // Encode MACs.
+        encoder.put_bytes(&self.portable_mac)?;
+        encoder.put_bytes(&self.local_mac)?;
+
+        ////////////////////////////////
+        // Encode padding up to LENGTH_V1.
+        encoder.put_zero_padding(240)?;
+
+        ////////////////////////////////
+        // Encode extensions.
+        match &self.extension {
+            ObjectSetExtension::None {} => (),
+            ObjectSetExtension::Two {
+                user_used,
+                group_used,
+            } => {
+                user_used.to_encoder(encoder)?;
+                group_used.to_encoder(encoder)?;
+                // No padding for LENGTH_V2.
+            }
+            ObjectSetExtension::Three {
+                user_used,
+                group_used,
+                project_used,
+            } => {
+                user_used.to_encoder(encoder)?;
+                group_used.to_encoder(encoder)?;
+                project_used.to_encoder(encoder)?;
+                // Encode padding up to LENGTH_V3.
+                encoder.put_zero_padding(1536)?;
+            }
+        };
+
+        ////////////////////////////////
+        // Success.
+        Ok(())
     }
 }
 
@@ -275,8 +369,78 @@ impl fmt::Display for ObjectSetDecodeError {
 impl error::Error for ObjectSetDecodeError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match self {
+            ObjectSetDecodeError::DnodeDecodeError { err } => Some(err),
             ObjectSetDecodeError::EndianDecodeError { err } => Some(err),
+            ObjectSetDecodeError::ZilHeaderDecodeError { err } => Some(err),
             _ => None,
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub enum ObjectSetEncodeError {
+    /** [`Dnode`] encode error.
+     *
+     * - `err` - [`DnodeEncodeError`]
+     */
+    DnodeEncodeError { err: DnodeEncodeError },
+
+    /** Endian encode error.
+     *
+     * - `err` - [`EncodeError`]
+     */
+    EndianEncodeError { err: EncodeError },
+
+    /** [`ZilHeader`] encode error.
+     *
+     * - `err` - [`ZilHeaderEncodeError`]
+     */
+    ZilHeaderEncodeError { err: ZilHeaderEncodeError },
+}
+
+impl From<DnodeEncodeError> for ObjectSetEncodeError {
+    fn from(value: DnodeEncodeError) -> Self {
+        ObjectSetEncodeError::DnodeEncodeError { err: value }
+    }
+}
+
+impl From<EncodeError> for ObjectSetEncodeError {
+    fn from(value: EncodeError) -> Self {
+        ObjectSetEncodeError::EndianEncodeError { err: value }
+    }
+}
+
+impl From<ZilHeaderEncodeError> for ObjectSetEncodeError {
+    fn from(value: ZilHeaderEncodeError) -> Self {
+        ObjectSetEncodeError::ZilHeaderEncodeError { err: value }
+    }
+}
+
+impl fmt::Display for ObjectSetEncodeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ObjectSetEncodeError::DnodeEncodeError { err } => {
+                write!(f, "ObjectSet Dnode encode error: {err}")
+            }
+            ObjectSetEncodeError::EndianEncodeError { err } => {
+                write!(f, "ObjectSet Endian encode error: {err}")
+            }
+            ObjectSetEncodeError::ZilHeaderEncodeError { err } => {
+                write!(f, "ObjectSet Block Zil Header encode error: {err}")
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl error::Error for ObjectSetEncodeError {
+    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+        match self {
+            ObjectSetEncodeError::DnodeEncodeError { err } => Some(err),
+            ObjectSetEncodeError::EndianEncodeError { err } => Some(err),
+            ObjectSetEncodeError::ZilHeaderEncodeError { err } => Some(err),
         }
     }
 }
